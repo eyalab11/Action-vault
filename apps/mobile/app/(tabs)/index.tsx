@@ -1,6 +1,7 @@
-import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator, AppState } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item, type Section } from '../../lib/api';
 import { colors, spacing, radius, cardShadow, typography } from '../../lib/theme';
@@ -23,6 +24,20 @@ function formatAge(d: string) {
 
 export default function HomeScreen() {
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const appState = useRef(AppState.currentState);
+
+  // Re-fetch everything when the app comes back from background after 5+ minutes
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', nextState => {
+      if (appState.current.match(/inactive|background/) && nextState === 'active') {
+        queryClient.invalidateQueries({ queryKey: ['items'] });
+      }
+      appState.current = nextState;
+    });
+    return () => sub.remove();
+  }, [queryClient]);
+
   const { data, isLoading } = useQuery({ queryKey: ['items', 'all'], queryFn: () => listItems({ limit: 50 }) });
   const items = data?.items ?? [];
 
