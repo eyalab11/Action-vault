@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/auth';
 import { colors } from '../lib/theme';
 import * as Linking from 'expo-linking';
+import ReceiveSharingIntent from 'react-native-receive-sharing-intent';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,29 +32,28 @@ export default function RootLayout() {
     return () => listener.subscription.unsubscribe();
   }, [setSession]);
 
-  // Handle Android share intent — when user shares a URL to ActionVault
+  // Handle Android share intent — runs ONCE on mount only to avoid double-processing
   useEffect(() => {
-    const handleUrl = (url: string | null) => {
-      if (!url) return;
-      // Extract shared text from the intent URL
-      // Android shares come as: actionvault://?text=https://...
-      try {
-        const parsed = Linking.parse(url);
-        const sharedText = parsed.queryParams?.text as string | undefined;
-        const targetUrl = sharedText ?? parsed.queryParams?.url as string | undefined;
-        if (targetUrl && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))) {
-          router.push({ pathname: '/(tabs)/add', params: { sharedUrl: targetUrl } });
+    // Clear any stale intent data from a previous session first
+    ReceiveSharingIntent.clearReceivedFiles();
+
+    ReceiveSharingIntent.getReceivedFiles(
+      (files: any[]) => {
+        const shared = files?.[0];
+        const url = shared?.weblink || shared?.text || shared?.subject;
+        if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+          // Small delay so the router is ready before pushing
+          setTimeout(() => {
+            router.push({ pathname: '/(tabs)/add', params: { sharedUrl: url } });
+          }, 300);
         }
-      } catch {}
-    };
-
-    // Handle app opened via share intent
-    Linking.getInitialURL().then(handleUrl);
-
-    // Handle share intent while app is already open
-    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
-    return () => sub.remove();
-  }, [router]);
+        ReceiveSharingIntent.clearReceivedFiles();
+      },
+      (_error: any) => {},
+      'actionvault',
+    );
+    // Empty deps — run only once when the app first mounts
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <QueryClientProvider client={queryClient}>

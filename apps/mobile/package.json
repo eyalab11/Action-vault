@@ -25,6 +25,7 @@
     "expo-status-bar": "*",
     "react": "*",
     "react-native": "*",
+    "react-native-receive-sharing-intent": "^2.0.0",
     "react-native-safe-area-context": "*",
     "react-native-screens": "*",
     "zustand": "^4.5.4"

@@ -30,10 +30,10 @@ import { analyzeUrl, analyzeUrls } from '../../lib/api';
 import { colors, radius, typography, spacing, cardShadow } from '../../lib/theme';
 
 const PLATFORM_HINTS = [
-  { label: 'YouTube', icon: '▶' },
-  { label: 'TikTok', icon: '♪' },
-  { label: 'Instagram', icon: '◈' },
-  { label: 'Web', icon: '○' },
+  { label: 'YouTube', icon: '▶', note: 'YouTube video' },
+  { label: 'TikTok', icon: '♪', note: 'TikTok video' },
+  { label: 'Instagram', icon: '◈', note: 'Instagram reel' },
+  { label: 'Web', icon: '○', note: 'Web article' },
 ];
 
 export default function AddLinkScreen() {
@@ -46,10 +46,10 @@ export default function AddLinkScreen() {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
 
-  // Auto-fill URL when app is opened via Android share intent
+  // Auto-fill URL when app is opened via Android share intent (runs once per sharedUrl value)
   useEffect(() => {
     if (sharedUrl && sharedUrl.startsWith('http')) {
-      setUrl(sharedUrl);
+      setUrl(sharedUrl); // replace, not append — prevents duplicates
     }
   }, [sharedUrl]);
 
@@ -162,13 +162,19 @@ export default function AddLinkScreen() {
           Paste one or more links — we'll extract what matters and what to do next.
         </Text>
 
-        {/* Platform hints */}
+        {/* Platform shortcuts — tap to set context */}
         <View style={styles.hintRow}>
           {PLATFORM_HINTS.map((h) => (
-            <View key={h.label} style={styles.hintChip}>
+            <Pressable
+              key={h.label}
+              style={[styles.hintChip, note === h.note && styles.hintChipActive]}
+              onPress={() => setNote((prev) => prev === h.note ? '' : h.note)}
+            >
               <Text style={styles.hintIcon}>{h.icon}</Text>
-              <Text style={styles.hintText}>{h.label}</Text>
-            </View>
+              <Text style={[styles.hintText, note === h.note && styles.hintTextActive]}>
+                {h.label}
+              </Text>
+            </Pressable>
           ))}
         </View>
 
@@ -224,6 +230,9 @@ export default function AddLinkScreen() {
           </Text>
           <Text style={styles.analyzeArrow}>→</Text>
         </Pressable>
+        {!url.trim() && (
+          <Text style={styles.disabledHint}>Paste a link above to continue</Text>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -251,9 +260,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: radius.full,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  hintChipActive: {
+    backgroundColor: colors.accentSoft,
+    borderColor: colors.accent,
   },
   hintIcon: { fontSize: 12, color: colors.textMuted },
   hintText: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
+  hintTextActive: { color: colors.accent, fontWeight: '600' },
+  disabledHint: {
+    textAlign: 'center',
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 10,
+  },
 
   inputCard: {
     backgroundColor: colors.surface,
