@@ -1,0 +1,27 @@
+{
+  "name": "actionvault",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "dev:api": "turbo dev --filter=@actionvault/api",
+    "dev:worker": "turbo dev --filter=@actionvault/worker",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "db:migrate": "cd db && node migrate.js"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "npm@11.8.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

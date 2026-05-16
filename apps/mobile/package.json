@@ -1,0 +1,37 @@
+{
+  "name": "@actionvault/mobile",
+  "version": "0.0.1",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "*",
+    "@react-native-async-storage/async-storage": "*",
+    "@supabase/supabase-js": "^2.43.0",
+    "@tanstack/react-query": "^5.45.0",
+    "expo": "*",
+    "expo-clipboard": "*",
+    "expo-constants": "*",
+    "expo-font": "*",
+    "expo-linking": "*",
+    "expo-router": "*",
+    "expo-secure-store": "*",
+    "expo-splash-screen": "*",
+    "expo-status-bar": "*",
+    "react": "*",
+    "react-native": "*",
+    "react-native-safe-area-context": "*",
+    "react-native-screens": "*",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@types/react": "*",
+    "typescript": "^5.3.3"
+  }
+}
