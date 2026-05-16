@@ -157,7 +157,9 @@ export interface ActionExtractionOutput {
   action_notes: string;
 }
 
-export const EXTRACT_ACTIONS_SYSTEM_PROMPT = `You extract concrete, specific action steps from content summaries for a productivity app.
+export const EXTRACT_ACTIONS_SYSTEM_PROMPT = `You extract concrete, specific action steps from content summaries for a productivity app called ActionVault.
+
+Your job is to turn saved content into a personal to-do list the user can actually execute. Think like a coach distilling a video/article into the exact steps someone should take THIS WEEK.
 
 IMPORTANT: Adapt your output based on the content type:
 
@@ -172,20 +174,24 @@ FOR ALL OTHER CONTENT:
 - Do NOT write vague advice like "learn more", "do research", "think about it", "consider X".
 - Do NOT start steps with "You should" or "Try to".
 - Do NOT include steps about buying a course, enrolling in a program, or signing up for whatever the creator is selling.
-- Write steps like:
+- Each step MUST have a description (2-3 sentences) that explains: (1) exactly HOW to do this step, (2) a specific tip or insight from the content that makes this step more effective, and (3) why it matters or what result to expect.
+- The description should feel like advice from someone who has done this before — specific, practical, not generic.
+- Write step titles like:
     "Create a Gumroad account and upload your first product"
     "Write 3 before/after resume examples to use as samples"
     "Post your offer in 5 relevant Facebook or Reddit communities"
+- Bad description: "Research the topic and learn more about it."
+- Good description: "Spend 20 minutes on LinkedIn searching '[your niche] + freelancer' to see how top earners position themselves. Note their exact language for pricing and packages — you'll use this to write your own offer page."
 
 Start each step title with an imperative verb (except for recipe ingredients). Max 60 characters per title.
-Generate 3–7 steps for non-recipe content. For recipes, generate as many as needed to cover all ingredients and cooking steps.
+Generate 4–6 steps for non-recipe content. Each step must have a non-null description. For recipes, generate as many as needed.
 
 Return valid JSON only. No markdown.
 
 REQUIRED OUTPUT:
 {
   "action_steps": [
-    { "order": 1, "title": "string", "description": "string or null" }
+    { "order": 1, "title": "string", "description": "string" }
   ],
   "action_confidence": number,
   "action_notes": "string"

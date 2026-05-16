@@ -10,7 +10,7 @@
  * know something real is happening.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -24,7 +24,7 @@ import {
   Platform,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { analyzeUrl, analyzeUrls } from '../../lib/api';
 import { colors, radius, typography, spacing, cardShadow } from '../../lib/theme';
@@ -39,11 +39,19 @@ const PLATFORM_HINTS = [
 export default function AddLinkScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { sharedUrl } = useLocalSearchParams<{ sharedUrl?: string }>();
 
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+
+  // Auto-fill URL when app is opened via Android share intent
+  useEffect(() => {
+    if (sharedUrl && sharedUrl.startsWith('http')) {
+      setUrl(sharedUrl);
+    }
+  }, [sharedUrl]);
 
   async function pasteFromClipboard() {
     const text = await Clipboard.getStringAsync();
