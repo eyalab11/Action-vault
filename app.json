@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "a6c4fcb3-45c5-4176-ab7e-185ef719bcff"
+      }
+    },
+    "android": {
+      "package": "com.eyalab.actionvault"
+    }
+  }
+}

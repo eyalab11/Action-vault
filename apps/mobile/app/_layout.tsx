@@ -40,9 +40,12 @@ export default function RootLayout() {
         const parsed = Linking.parse(url);
         const sharedUrl = parsed.queryParams?.sharedUrl as string | undefined;
         if (sharedUrl && (sharedUrl.startsWith('http://') || sharedUrl.startsWith('https://'))) {
+          // Use 800ms — enough time for the navigator to mount on a cold start
           setTimeout(() => {
-            router.push({ pathname: '/(tabs)/add', params: { sharedUrl } });
-          }, 300);
+            try {
+              router.push({ pathname: '/(tabs)/add', params: { sharedUrl } });
+            } catch {}
+          }, 800);
         }
       } catch {}
     };

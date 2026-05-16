@@ -7,7 +7,7 @@
 
 import { useState } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Linking, Alert, TextInput, ActivityIndicator } from 'react-native';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import { WebView } from 'react-native-webview';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,24 +29,34 @@ function SectionPanel({ item }: { item: Item }) {
     if (locs.length === 0) return null;
     const avgLat = locs.reduce((s, l) => s + l.lat, 0) / locs.length;
     const avgLng = locs.reduce((s, l) => s + l.lng, 0) / locs.length;
+    const delta = locs.length > 1 ? 8 : 0.3;
+    const pinsJson = JSON.stringify(locs.map(loc => ({
+      lat: loc.lat, lng: loc.lng, name: loc.name,
+      color: PIN_COLORS[loc.type] ?? '#718096',
+    })));
+    const miniMapHtml = `<!DOCTYPE html><html><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>*{margin:0;padding:0;box-sizing:border-box;}html,body,#map{width:100%;height:100%;}.pin{width:22px;height:22px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);}</style>
+</head><body><div id="map"></div><script>
+var map=L.map('map',{zoomControl:false,attributionControl:false});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+map.setView([${avgLat},${avgLng}],${locs.length > 1 ? 5 : 13});
+var pins=${pinsJson};
+pins.forEach(function(p){var el=document.createElement('div');el.className='pin';el.style.backgroundColor=p.color;L.marker([p.lat,p.lng],{icon:L.divIcon({html:el.outerHTML,iconSize:[22,22],iconAnchor:[11,11],className:''})}).addTo(map);});
+</script></body></html>`;
     return (
       <View style={panelStyles.panel}>
-        <Text style={panelStyles.panelTitle}>{locs.length} location{locs.length > 1 ? 's' : ''} on map</Text>
-        <MapView
+        <Text style={panelStyles.panelTitle}>{locs.length} location{locs.length > 1 ? 's' : ''}</Text>
+        <WebView
           style={panelStyles.miniMap}
-          provider={PROVIDER_DEFAULT}
-          initialRegion={{ latitude: avgLat, longitude: avgLng, latitudeDelta: locs.length > 1 ? 8 : 0.3, longitudeDelta: locs.length > 1 ? 8 : 0.3 }}
+          source={{ html: miniMapHtml }}
+          javaScriptEnabled
           scrollEnabled={false}
-          zoomEnabled={false}
-        >
-          {locs.map((loc, i) => (
-            <Marker key={i} coordinate={{ latitude: loc.lat, longitude: loc.lng }}>
-              <View style={[panelStyles.pin, { backgroundColor: PIN_COLORS[loc.type] ?? '#718096' }]}>
-                <Ionicons name="location" size={12} color="#fff" />
-              </View>
-            </Marker>
-          ))}
-        </MapView>
+          originWhitelist={['*']}
+          mixedContentMode="always"
+        />
         {locs.map((loc, i) => (
           <View key={i} style={panelStyles.locationRow}>
             <View style={[panelStyles.locationDot, { backgroundColor: PIN_COLORS[loc.type] ?? '#718096' }]} />
@@ -362,8 +372,15 @@ export default function ItemDetailScreen() {
         {/* Title */}
         <Text style={styles.title}>{item.title ?? 'Untitled'}</Text>
 
-        {/* Summary */}
-        {item.summary ? (
+        {/* Summary — detect deleted/unavailable content */}
+        {item.extraction_quality === 'failed' || (item.summary ?? '').toLowerCase().includes('not available') || (item.summary ?? '').toLowerCase().includes('taken down') || (item.summary ?? '').toLowerCase().includes('no longer available') ? (
+          <View style={styles.deletedBox}>
+            <Ionicons name="alert-circle-outline" size={20} color="#9B2C2C" />
+            <Text style={styles.deletedText}>
+              This content has been deleted or is no longer available. The original post was removed before it could be analysed.
+            </Text>
+          </View>
+        ) : item.summary ? (
           <Text style={styles.summary}>{item.summary}</Text>
         ) : (
           <View style={styles.noSummaryBox}>
@@ -571,6 +588,12 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
 
+  deletedBox: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    backgroundColor: '#FFF5F5', borderRadius: radius.md,
+    padding: 16, marginBottom: 18, borderLeftWidth: 3, borderLeftColor: '#FC8181',
+  },
+  deletedText: { flex: 1, fontSize: 14, color: '#9B2C2C', lineHeight: 20 },
   noSummaryBox: {
     backgroundColor: colors.warningSoft,
     borderRadius: radius.md,
