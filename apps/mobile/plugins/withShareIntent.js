@@ -1,14 +1,10 @@
 const { withMainActivity } = require('@expo/config-plugins');
 
+// Only add onNewIntent + private helper — do NOT add a second onCreate
 const METHODS = `
   override fun onNewIntent(intent: Intent?) {
     handleShareIntent(intent)
     super.onNewIntent(intent)
-  }
-
-  override fun onCreate(savedInstanceState: android.os.Bundle?) {
-    handleShareIntent(intent)
-    super.onCreate(savedInstanceState)
   }
 
   private fun handleShareIntent(intent: Intent?) {
@@ -25,15 +21,26 @@ const METHODS = `
 module.exports = function withShareIntent(config) {
   return withMainActivity(config, (mod) => {
     let contents = mod.modResults.contents;
+
+    // Add import if missing
     if (!contents.includes('import android.content.Intent')) {
+      contents = contents.replace(/^(import .+)$/m, '$1\nimport android.content.Intent');
+    }
+
+    // Inject handleShareIntent(intent) into the EXISTING onCreate — before super.onCreate
+    // This handles fresh app launches from share sheet
+    if (!contents.includes('handleShareIntent')) {
       contents = contents.replace(
-        /^(import .+)$/m,
-        '$1\nimport android.content.Intent'
+        /override fun onCreate\(savedInstanceState: Bundle\?\) \{/,
+        'override fun onCreate(savedInstanceState: Bundle?) {\n    handleShareIntent(intent)'
       );
     }
-    if (!contents.includes('handleShareIntent')) {
+
+    // Add onNewIntent + private helper before last brace (handles app-already-open case)
+    if (!contents.includes('onNewIntent')) {
       contents = contents.replace(/}\s*$/, METHODS + '\n}');
     }
+
     mod.modResults.contents = contents;
     return mod;
   });
