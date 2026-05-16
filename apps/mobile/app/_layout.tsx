@@ -6,7 +6,6 @@ import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/auth';
 import { colors } from '../lib/theme';
 import * as Linking from 'expo-linking';
-import ReceiveSharingIntent from 'react-native-receive-sharing-intent';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,27 +31,28 @@ export default function RootLayout() {
     return () => listener.subscription.unsubscribe();
   }, [setSession]);
 
-  // Handle Android share intent — runs ONCE on mount only to avoid double-processing
+  // Handle Android share intent — the config plugin converts ACTION_SEND → actionvault://add?sharedUrl=...
+  // so Expo's Linking module can read it normally.
   useEffect(() => {
-    // Clear any stale intent data from a previous session first
-    ReceiveSharingIntent.clearReceivedFiles();
-
-    ReceiveSharingIntent.getReceivedFiles(
-      (files: any[]) => {
-        const shared = files?.[0];
-        const url = shared?.weblink || shared?.text || shared?.subject;
-        if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
-          // Small delay so the router is ready before pushing
+    const handleUrl = (url: string | null) => {
+      if (!url) return;
+      try {
+        const parsed = Linking.parse(url);
+        const sharedUrl = parsed.queryParams?.sharedUrl as string | undefined;
+        if (sharedUrl && (sharedUrl.startsWith('http://') || sharedUrl.startsWith('https://'))) {
           setTimeout(() => {
-            router.push({ pathname: '/(tabs)/add', params: { sharedUrl: url } });
+            router.push({ pathname: '/(tabs)/add', params: { sharedUrl } });
           }, 300);
         }
-        ReceiveSharingIntent.clearReceivedFiles();
-      },
-      (_error: any) => {},
-      'actionvault',
-    );
-    // Empty deps — run only once when the app first mounts
+      } catch {}
+    };
+
+    // App opened fresh via share intent
+    Linking.getInitialURL().then(handleUrl);
+
+    // App already open, share intent arrives
+    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => sub.remove();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
