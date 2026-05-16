@@ -9,7 +9,15 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://action-vault.onrender.com",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://cevpsrydlowwpasnpgwc.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_s8nVm7Y6Cg-fxx6UYKaQVg_1P1XX47t"
+      }
     },
     "production": {
       "autoIncrement": true
