@@ -25,6 +25,7 @@
     "expo-status-bar": "*",
     "react": "*",
     "react-native": "*",
+    "react-native-gesture-handler": "~2.28.0",
     "react-native-receive-sharing-intent": "^2.0.0",
     "react-native-safe-area-context": "*",
     "react-native-screens": "*",
