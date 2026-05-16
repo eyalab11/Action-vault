@@ -14,18 +14,22 @@ import { supabase } from '../lib/supabase';
 
 export const analyzeRouter = Router();
 
+const VALID_SECTIONS = ['general', 'travel', 'food', 'ai', 'money'] as const;
+
 const bodySchema = z.object({
   url: z.string().url('Must be a valid URL'),
   manual_note: z.string().max(1000).optional(),
+  // Optional explicit section from the user's UI selection — overrides AI detection
+  section: z.enum(VALID_SECTIONS).optional(),
 });
 
 analyzeRouter.post('/', requireAuth, async (req, res) => {
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten().fieldErrors });
 
-  const { url, manual_note } = parsed.data;
+  const { url, manual_note, section: userSection } = parsed.data;
   const userId = req.userId;
-  console.log(`[analyze] user=${userId} url=${url}`);
+  console.log(`[analyze] user=${userId} url=${url} userSection=${userSection ?? 'auto'}`);
 
   // 1. Fetch metadata
   const metadata = await fetchMetadata(url);
@@ -42,9 +46,10 @@ analyzeRouter.post('/', requireAuth, async (req, res) => {
     transcript: metadata.transcript,
   });
 
-  // 3. Detect section
-  const section = detectSection(analysis.primary_category, analysis.tags, analysis.title, analysis.summary);
-  console.log(`[analyze] section=${section} category=${analysis.primary_category}`);
+  // 3. Detect section — user's explicit choice wins, otherwise AI detection
+  const detectedSection = detectSection(analysis.primary_category, analysis.tags, analysis.title, analysis.summary);
+  const section = (userSection && userSection !== 'general') ? userSection : detectedSection;
+  console.log(`[analyze] section=${section} (user=${userSection ?? 'none'} detected=${detectedSection}) category=${analysis.primary_category}`);
 
   // 4. Stage 2 + Stage 3 — run in parallel
   const [actionsResult, sectionResult] = await Promise.all([

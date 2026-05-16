@@ -31,9 +31,8 @@ export default function TabsLayout() {
       <Tabs.Screen name="travel"  options={{ headerShown: false, tabBarLabel: 'Travel', tabBarIcon: ({ color, size }) => <Ionicons name="map-outline"           size={size}     color={color} /> }} />
       <Tabs.Screen name="add"     options={{ headerShown: false, tabBarLabel: 'Save',   tabBarIcon: ({ color, size }) => <Ionicons name="add-circle-outline"    size={size + 4} color={color} /> }} />
       <Tabs.Screen name="food"    options={{ headerShown: false, tabBarLabel: 'Food',   tabBarIcon: ({ color, size }) => <Ionicons name="restaurant-outline"    size={size}     color={color} /> }} />
+      <Tabs.Screen name="ai"      options={{ headerShown: false, tabBarLabel: 'AI',     tabBarIcon: ({ color, size }) => <Ionicons name="sparkles-outline"      size={size}     color={color} /> }} />
       <Tabs.Screen name="money"   options={{ headerShown: false, tabBarLabel: 'Money',  tabBarIcon: ({ color, size }) => <Ionicons name="trending-up-outline"   size={size}     color={color} /> }} />
-      {/* AI screen — accessible via Home section card, not in bottom nav */}
-      <Tabs.Screen name="ai"      options={{ headerShown: false, href: null }} />
       {/* Library — accessible via items, not main nav */}
       <Tabs.Screen name="library" options={{ href: null }} />
     </Tabs>

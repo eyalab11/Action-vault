@@ -84,16 +84,21 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   return res.json() as Promise<T>;
 }
 
-export async function analyzeUrl(url: string, manualNote?: string) {
+export async function analyzeUrl(url: string, manualNote?: string, section?: Section) {
   return apiFetch<{ item: Item & { action_tasks: ActionTask[] } }>('/analyze', {
-    method: 'POST', body: JSON.stringify({ url, manual_note: manualNote }),
+    method: 'POST',
+    body: JSON.stringify({
+      url,
+      manual_note: manualNote,
+      ...(section && section !== 'general' ? { section } : {}),
+    }),
   });
 }
 
-export async function analyzeUrls(urls: string[], manualNote?: string, onProgress?: (c: number, t: number) => void) {
+export async function analyzeUrls(urls: string[], manualNote?: string, onProgress?: (c: number, t: number) => void, section?: Section) {
   const results = [];
   for (let i = 0; i < urls.length; i++) {
-    results.push(await analyzeUrl(urls[i], manualNote));
+    results.push(await analyzeUrl(urls[i], manualNote, section));
     onProgress?.(i + 1, urls.length);
   }
   return results;

@@ -83,16 +83,18 @@ export default function AddLinkScreen() {
     const t1 = setTimeout(() => setLoadingMessage(messages[1] ?? messages[0]), 3500);
     const t2 = setTimeout(() => setLoadingMessage(messages[2] ?? messages[1] ?? messages[0]), 8000);
 
-    const manualNote = note.trim() || (section !== 'auto' ? `Section: ${section}` : undefined);
+    const manualNote = note.trim() || undefined;
+    // Pass explicit section so the backend respects user's vault choice
+    const explicitSection = section !== 'auto' ? section : undefined;
 
     try {
       if (urls.length > 1) {
-        const results = await analyzeUrls(urls, manualNote, (c, t) => setLoadingMessage(`Analyzing ${c}/${t}…`));
+        const results = await analyzeUrls(urls, manualNote, (c, t) => setLoadingMessage(`Analyzing ${c}/${t}…`), explicitSection);
         await queryClient.invalidateQueries({ queryKey: ['items'] });
         setUrl(''); setNote('');
         router.push(`/items/${results[results.length - 1].item.id}`);
       } else {
-        const result = await analyzeUrl(urls[0], manualNote);
+        const result = await analyzeUrl(urls[0], manualNote, explicitSection);
         await queryClient.invalidateQueries({ queryKey: ['items'] });
         setUrl(''); setNote('');
         router.push(`/items/${result.item.id}`);
