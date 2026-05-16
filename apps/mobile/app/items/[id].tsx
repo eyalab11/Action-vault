@@ -41,7 +41,7 @@ function SectionPanel({ item }: { item: Item }) {
 <style>*{margin:0;padding:0;box-sizing:border-box;}html,body,#map{width:100%;height:100%;}.pin{width:22px;height:22px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3);}</style>
 </head><body><div id="map"></div><script>
 var map=L.map('map',{zoomControl:false,attributionControl:false});
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
 map.setView([${avgLat},${avgLng}],${locs.length > 1 ? 5 : 13});
 var pins=${pinsJson};
 pins.forEach(function(p){var el=document.createElement('div');el.className='pin';el.style.backgroundColor=p.color;L.marker([p.lat,p.lng],{icon:L.divIcon({html:el.outerHTML,iconSize:[22,22],iconAnchor:[11,11],className:''})}).addTo(map);});

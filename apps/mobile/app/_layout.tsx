@@ -66,13 +66,25 @@ export default function RootLayout() {
   // Handle Android share intent — the config plugin converts ACTION_SEND → actionvault://add?sharedUrl=...
   // so Expo's Linking module can read it normally.
   useEffect(() => {
+    const extractFirstUrl = (text: string): string | null => {
+      // Match any http/https URL in the text (handles cases where Instagram prepends text)
+      const match = text.match(/https?:\/\/[^\s"'<>]+/);
+      return match ? match[0] : null;
+    };
+
     const handleUrl = (url: string | null) => {
       if (!url) return;
       try {
         const parsed = Linking.parse(url);
-        const sharedUrl = parsed.queryParams?.sharedUrl as string | undefined;
-        if (sharedUrl && (sharedUrl.startsWith('http://') || sharedUrl.startsWith('https://'))) {
-          // Use 800ms — enough time for the navigator to mount on a cold start
+        const raw = parsed.queryParams?.sharedUrl as string | undefined;
+        if (!raw) return;
+
+        // Accept pure URL or extract first URL from text (e.g. "Check this out: https://...")
+        const sharedUrl = (raw.startsWith('http://') || raw.startsWith('https://'))
+          ? raw
+          : extractFirstUrl(raw);
+
+        if (sharedUrl) {
           setTimeout(() => {
             try {
               router.push({ pathname: '/(tabs)/add', params: { sharedUrl } });
