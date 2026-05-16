@@ -1,31 +1,37 @@
 /**
- * AI prompt contracts for ActionVault MVP.
+ * ActionVault v2 AI prompt contracts.
  *
- * Rules:
- * - All prompts return strict JSON. No markdown. No prose outside JSON.
- * - Prompt version is tracked so we can reprocess old items when prompts change.
- * - System prompt is separated from user prompt for clean token accounting.
+ * 4 specialized sections, each with section-specific extraction
+ * after the base analysis:
+ *   - travel  → locations with lat/lng for map pins
+ *   - food    → taste profile, cuisine, ingredients
+ *   - ai      → tool detection, use-case, prompt tip
+ *   - money   → tickers, sentiment, asset type
  */
 
-export const PROMPT_VERSION = 'v1.2';
+export const PROMPT_VERSION = 'v2.0';
 
 export const CATEGORIES = [
-  'AI',
-  'Work',
-  'Money',
-  'Productivity',
-  'Learning',
-  'Travel',
-  'Food',
-  'Fitness',
-  'PersonalAdmin',
-  'Inspiration',
-  'Other',
+  'AI', 'Work', 'Money', 'Productivity', 'Learning',
+  'Travel', 'Food', 'Fitness', 'PersonalAdmin', 'Inspiration', 'Other',
 ] as const;
-
 export type Category = (typeof CATEGORIES)[number];
 
-// ─── Stage 1: Item Analysis ───────────────────────────────────
+export const SECTIONS = ['general', 'travel', 'food', 'ai', 'money'] as const;
+export type Section = (typeof SECTIONS)[number];
+
+// ─── Section detection ────────────────────────────────────────────────────────
+
+export function detectSection(category: Category, tags: string[], title: string, summary: string): Section {
+  const text = `${title} ${summary} ${tags.join(' ')}`.toLowerCase();
+  if (category === 'Travel' || /\b(travel|trip|visit|restaurant|hotel|city|country|destination|map|place|food spot|cafe|beach|mountain|hike|tour)\b/.test(text)) return 'travel';
+  if (category === 'Food' || /\b(recipe|cook|bake|ingredient|meal|dish|cuisine|taste|flavor|sweet|salty|spicy|grill|fry|sauce)\b/.test(text)) return 'food';
+  if (category === 'AI' || /\b(ai|chatgpt|claude|gemini|openai|llm|prompt|model|gpt|midjourney|stable diffusion|copilot|cursor)\b/.test(text)) return 'ai';
+  if (category === 'Money' || /\b(stock|crypto|invest|trade|etf|dividend|portfolio|bitcoin|ethereum|ticker|market|bull|bear|finance)\b/.test(text)) return 'money';
+  return 'general';
+}
+
+// ─── Base analysis (Stage 1) ──────────────────────────────────────────────────
 
 export interface ItemAnalysisInput {
   platform: string;
@@ -34,7 +40,6 @@ export interface ItemAnalysisInput {
   ogDescription: string | null;
   creatorName: string | null;
   manualNote: string | null;
-  /** Transcript of the video audio, if available. */
   transcript: string | null;
 }
 
@@ -49,48 +54,26 @@ export interface ItemAnalysisOutput {
   extraction_notes: string;
 }
 
-export const ANALYZE_SYSTEM_PROMPT = `You are an expert content classifier for a personal productivity app called ActionVault.
-Users save social media links and web content. You understand what they saved, summarize it clearly, categorize it, and assess whether it contains actionable advice.
+export const ANALYZE_SYSTEM_PROMPT = `You are an expert content classifier for ActionVault, a personal productivity and discovery app.
+Users save social media links. You understand what they saved, summarize it clearly, categorize it, and assess whether it is actionable.
 
-Return valid JSON only. No markdown. No prose outside the JSON object. Do not add extra fields.
+Return valid JSON only. No markdown. No prose outside the JSON.
 
 CATEGORIES: AI, Work, Money, Productivity, Learning, Travel, Food, Fitness, PersonalAdmin, Inspiration, Other
 
-CAPTION vs. TRANSCRIPT — how to weigh your sources:
-You may receive a creator's caption AND/OR an audio transcript. Use them differently:
-- TRANSCRIPT = what the person actually said in the video. This is your PRIMARY source for understanding the content.
-- CAPTION = what the poster wrote underneath. Captions vary wildly in quality:
-    - HIGH-VALUE caption: explains the topic, lists key points, adds context not in the video (e.g. "5 ways to negotiate salary: 1. Research market rate 2. …")
-    - LOW-VALUE caption: just emojis, "link in bio", hashtag spam, promo/CTA ("DM me for coaching"), or vague hype ("this changed my life 🔥🔥🔥")
-  → If a caption contains real information or context, USE IT alongside the transcript.
-  → If a caption is just filler/promo/emojis, IGNORE IT — do not let it influence your title, summary, or category.
-  → When both caption and transcript are available and they cover different aspects, combine insights from both.
-  → When only a caption is available (no transcript), and the caption is low-value, set confidence_score below 0.5 and extraction_quality to "low".
+SOURCE PRIORITY:
+- TRANSCRIPT = what the person said (PRIMARY source)
+- CAPTION = what the poster wrote (use if informative; ignore if just hashtags/emojis/CTA)
 
 RULES:
-- title: max 80 characters, factual, no clickbait, no ALL CAPS. Write it like a clean bookmark title. Title should reflect the actual knowledge or advice, NOT the product/course/service being promoted.
-- summary: exactly 2-3 sentences. Plain prose. Focus on the actual knowledge, advice, strategies, or techniques shared in the content — NOT what the creator is selling or promoting. If someone is teaching a strategy while promoting their course, summarize the STRATEGY, not the course. Ignore CTAs, product names, and sales pitches entirely. For RECIPES: include the dish name, key ingredients, and cooking method in the summary.
-- primary_category: exactly one from the list above, the most dominant theme.
-- tags: 2-6 lowercase hyphenated tags. Be specific. Bad: "video", "content", "course", "academy". Good: "resume-writing", "ai-freelance", "meal-prep", "passive-income". Tags should describe the topic/advice, never the product being sold.
-- actionable: true only if the content contains specific steps or advice someone could actually follow. A "10 tips" video is actionable. A vlog is not.
-- confidence_score: 0.0–1.0. Reflect how much useful signal you had to work with:
-    >0.75 = clear title + description + context (high quality extraction)
-    0.50–0.75 = partial data, some inference required (e.g. social media caption without full article, or title + description without body text)
-    <0.50 = almost nothing to work with (URL only, no title or description at all)
+- title: max 80 chars, factual, no clickbait, reflects actual content not what is being sold
+- summary: exactly 2-3 sentences. Focus on knowledge/advice/places/techniques — NOT what the creator is selling
+- primary_category: one from the list, most dominant theme
+- tags: 2-6 lowercase hyphenated tags describing the topic/advice/location/technique
+- actionable: true only if content contains specific steps, techniques, or places to visit
+- confidence_score: 0.0–1.0 based on data richness
 - extraction_quality: "high" | "medium" | "low" | "failed"
-    high   = rich data, confident summary
-    medium = enough to make a reasonable inference
-    low    = very little data, summary is mostly guesswork
-    failed = cannot determine anything meaningful
-- extraction_notes: one sentence for internal use — what data was available and what was inferred.
-
-CRITICAL: If you have very little information (no title, no description, no transcript — just a URL or vague OG data), still return valid JSON but:
-- Set confidence_score below 0.5
-- Set extraction_quality to "low"
-- Set actionable to false (do NOT generate action steps from guesswork)
-- Do NOT invent specific app names, product names, or detailed advice that isn't explicitly stated in the data you received
-- Keep the summary honest about what you know vs. what you're guessing
-Never refuse to return JSON.
+- extraction_notes: one internal sentence about data quality
 
 REQUIRED OUTPUT:
 {
@@ -107,35 +90,27 @@ REQUIRED OUTPUT:
 export function buildAnalyzeUserPrompt(input: ItemAnalysisInput): string {
   const isVideoSocial = input.platform === 'instagram' || input.platform === 'tiktok';
   const lines = [
-    `Source platform: ${input.platform}`,
+    `Platform: ${input.platform}`,
     `URL: ${input.url}`,
-    `Title from page: ${input.ogTitle ?? '[not available]'}`,
+    `Title: ${input.ogTitle ?? '[not available]'}`,
   ];
   if (isVideoSocial && input.ogDescription) {
-    // For Instagram/TikTok, the "description" is actually the creator's caption.
-    // This is written by the poster and often contains the main context, key points,
-    // hashtags, and explanation of what the video is about.
-    lines.push(`\nCreator's caption (this is what the poster wrote on the video — treat this as HIGH-VALUE context, often more reliable than the video title):\n${input.ogDescription}`);
+    lines.push(`\nCreator caption:\n${input.ogDescription}`);
   } else {
-    lines.push(`Description from page: ${input.ogDescription ?? '[not available]'}`);
+    lines.push(`Description: ${input.ogDescription ?? '[not available]'}`);
   }
-  if (input.creatorName) lines.push(`Creator/account: ${input.creatorName}`);
+  if (input.creatorName) lines.push(`Creator: ${input.creatorName}`);
   if (input.transcript) {
-    // Truncate to ~2000 chars to keep token usage reasonable
     const truncated = input.transcript.length > 2000
       ? input.transcript.slice(0, 2000) + '… [truncated]'
       : input.transcript;
-    lines.push(`\nAudio transcript of the video (this is what the person in the video is saying — use this as your PRIMARY source of information):\n${truncated}`);
-  } else if (input.platform === 'instagram' || input.platform === 'tiktok') {
-    lines.push(`\n⚠️ NO TRANSCRIPT AVAILABLE — the video audio could not be transcribed. You only have the metadata above. Do NOT invent or guess what the video is about beyond what the title/description explicitly state. Do NOT fabricate app names, product names, or specific advice that isn't clearly stated in the metadata. If the metadata is vague, keep your summary vague and set confidence_score below 0.5 and extraction_quality to "low".`);
+    lines.push(`\nTranscript (PRIMARY SOURCE):\n${truncated}`);
   }
-  if (input.manualNote) lines.push(`User note (use this — it is context the user added): ${input.manualNote}`);
-
-  return lines.join('\n') + '\n\nClassify and summarize this content.';
+  if (input.manualNote) lines.push(`User note: ${input.manualNote}`);
+  return lines.join('\n') + '\n\nClassify and summarize.';
 }
 
-// ─── Stage 2: Action Extraction ───────────────────────────────
-// Only called when Stage 1 returns actionable: true.
+// ─── Action extraction (Stage 2) ──────────────────────────────────────────────
 
 export interface ActionExtractionInput {
   title: string;
@@ -157,60 +132,234 @@ export interface ActionExtractionOutput {
   action_notes: string;
 }
 
-export const EXTRACT_ACTIONS_SYSTEM_PROMPT = `You extract concrete, specific action steps from content summaries for a productivity app called ActionVault.
-
-Your job is to turn saved content into a personal to-do list the user can actually execute. Think like a coach distilling a video/article into the exact steps someone should take THIS WEEK.
-
-IMPORTANT: Adapt your output based on the content type:
+export const EXTRACT_ACTIONS_SYSTEM_PROMPT = `You extract concrete, specific action steps for a productivity app. Think like a coach distilling content into a personal to-do list the user can execute THIS WEEK.
 
 FOR RECIPES (category: Food):
-- List EVERY ingredient as its own separate step, with the title being the ingredient and quantity (e.g. "14 oz dried wheat noodles", "1/4 cup hoisin sauce", "6 garlic cloves, minced"). No description needed for ingredient steps.
-- After all ingredients, list the cooking instructions as separate steps with specific details (temperatures, times, techniques) in the description.
-- Include ALL details — the user should be able to shop and cook from these steps alone.
-- Generate as many steps as needed (no limit for recipes — can be 10-20+).
+- List EVERY ingredient as its own step (title = ingredient + quantity, no description needed)
+- Then list cooking steps with specific details (temps, times, techniques)
+- No limit on step count
 
 FOR ALL OTHER CONTENT:
-- Steps must be things a real person could put on a to-do list and complete within hours or days.
-- Do NOT write vague advice like "learn more", "do research", "think about it", "consider X".
-- Do NOT start steps with "You should" or "Try to".
-- Do NOT include steps about buying a course, enrolling in a program, or signing up for whatever the creator is selling.
-- Each step MUST have a description (2-3 sentences) that explains: (1) exactly HOW to do this step, (2) a specific tip or insight from the content that makes this step more effective, and (3) why it matters or what result to expect.
-- The description should feel like advice from someone who has done this before — specific, practical, not generic.
-- Write step titles like:
-    "Create a Gumroad account and upload your first product"
-    "Write 3 before/after resume examples to use as samples"
-    "Post your offer in 5 relevant Facebook or Reddit communities"
-- Bad description: "Research the topic and learn more about it."
-- Good description: "Spend 20 minutes on LinkedIn searching '[your niche] + freelancer' to see how top earners position themselves. Note their exact language for pricing and packages — you'll use this to write your own offer page."
-
-Start each step title with an imperative verb (except for recipe ingredients). Max 60 characters per title.
-Generate 4–6 steps for non-recipe content. Each step must have a non-null description. For recipes, generate as many as needed.
+- 4-6 steps max
+- Each step MUST have a description (2-3 sentences): HOW to do it, a specific insight from the content, and what result to expect
+- Start with an imperative verb
+- Never: "learn more", "do research", vague advice, buying/enrolling CTAs
+- Good example: "Create a Gumroad account and upload your first product"
+- Good description: "Spend 20 min on LinkedIn searching '[niche] + freelancer' — note their exact pricing language to write your own offer page. This positions you as premium from day one."
 
 Return valid JSON only. No markdown.
 
-REQUIRED OUTPUT:
 {
-  "action_steps": [
-    { "order": 1, "title": "string", "description": "string" }
-  ],
+  "action_steps": [{ "order": 1, "title": "string", "description": "string" }],
   "action_confidence": number,
   "action_notes": "string"
 }`;
 
-export function buildExtractActionsUserPrompt(
-  input: ActionExtractionInput,
-): string {
+export function buildExtractActionsUserPrompt(input: ActionExtractionInput): string {
   const lines = [
-    `Content title: ${input.title}`,
+    `Title: ${input.title}`,
     `Summary: ${input.summary}`,
     `Category: ${input.category}`,
     `Tags: ${input.tags.join(', ')}`,
   ];
   if (input.manualNote) lines.push(`User note: ${input.manualNote}`);
   if (input.category === 'Food') {
-    lines.push('\nThis is a recipe. List every ingredient as its own step, then the cooking instructions. Include all measurements and details.');
+    lines.push('\nThis is a recipe. List every ingredient as its own step, then the cooking instructions.');
   } else {
-    lines.push('\nExtract 3–7 concrete action steps from this content.');
+    lines.push('\nExtract 4-6 concrete, specific action steps. Each needs a detailed description.');
   }
+  return lines.join('\n');
+}
+
+// ─── Travel extraction (Stage 3 — travel section only) ────────────────────────
+
+export interface TravelLocation {
+  name: string;
+  lat: number;
+  lng: number;
+  description: string;
+  type: 'restaurant' | 'landmark' | 'hotel' | 'activity' | 'neighborhood' | 'other';
+}
+
+export interface TravelExtractionOutput {
+  locations: TravelLocation[];
+  trip_context: string;
+  best_season: string | null;
+}
+
+export const EXTRACT_TRAVEL_SYSTEM_PROMPT = `You extract specific locations from travel content for an interactive map.
+
+For each place mentioned:
+- Provide accurate lat/lng coordinates (use your knowledge of real places)
+- Give a brief description of why this place is interesting based on the content
+- Classify the type
+
+If the content is vague about location, only include places you're confident about.
+If no specific places are mentioned, return an empty locations array.
+
+Return valid JSON only:
+{
+  "locations": [
+    {
+      "name": "string (full place name, e.g. 'Shibuya Crossing, Tokyo')",
+      "lat": number,
+      "lng": number,
+      "description": "string (1 sentence — what makes this place worth visiting based on the content)",
+      "type": "restaurant|landmark|hotel|activity|neighborhood|other"
+    }
+  ],
+  "trip_context": "string (1 sentence — what kind of trip this is, e.g. 'Budget backpacking trip through Southeast Asia')",
+  "best_season": "string or null (e.g. 'Spring (March-May)')"
+}`;
+
+export function buildExtractTravelUserPrompt(title: string, summary: string, tags: string[], transcript: string | null): string {
+  const lines = [
+    `Content title: ${title}`,
+    `Summary: ${summary}`,
+    `Tags: ${tags.join(', ')}`,
+  ];
+  if (transcript) {
+    const t = transcript.length > 1500 ? transcript.slice(0, 1500) + '…' : transcript;
+    lines.push(`\nTranscript:\n${t}`);
+  }
+  lines.push('\nExtract all specific locations mentioned. Provide accurate GPS coordinates.');
+  return lines.join('\n');
+}
+
+// ─── Food extraction (Stage 3 — food section only) ────────────────────────────
+
+export interface FoodTasteProfile {
+  sweet: boolean;
+  salty: boolean;
+  spicy: boolean;
+  savory: boolean;
+  sour: boolean;
+  umami: boolean;
+  bitter: boolean;
+}
+
+export interface FoodExtractionOutput {
+  taste_profile: FoodTasteProfile;
+  cuisine: string;
+  cook_time_minutes: number | null;
+  difficulty: 'easy' | 'medium' | 'hard';
+  ingredient_count: number | null;
+  dietary: string[];
+  mood_tags: string[];
+}
+
+export const EXTRACT_FOOD_SYSTEM_PROMPT = `You extract taste profile and recipe metadata from food content.
+
+Taste profile: assess which tastes are prominent (true/false for each).
+Cuisine: most specific cuisine name (e.g. "Japanese ramen" not just "Asian").
+Mood tags: emotional/contextual tags like "comfort-food", "date-night", "meal-prep", "hangover-cure", "impressive-guests", "late-night", "summer-bbq".
+Dietary: applicable tags from: vegetarian, vegan, gluten-free, dairy-free, keto, low-carb, high-protein.
+
+Return valid JSON only:
+{
+  "taste_profile": {
+    "sweet": boolean, "salty": boolean, "spicy": boolean,
+    "savory": boolean, "sour": boolean, "umami": boolean, "bitter": boolean
+  },
+  "cuisine": "string",
+  "cook_time_minutes": number or null,
+  "difficulty": "easy|medium|hard",
+  "ingredient_count": number or null,
+  "dietary": ["string"],
+  "mood_tags": ["string"]
+}`;
+
+export function buildExtractFoodUserPrompt(title: string, summary: string, tags: string[]): string {
+  return `Title: ${title}\nSummary: ${summary}\nTags: ${tags.join(', ')}\n\nExtract taste profile and recipe metadata.`;
+}
+
+// ─── AI Tool extraction (Stage 3 — ai section only) ───────────────────────────
+
+export type AITool =
+  | 'ChatGPT' | 'Claude' | 'Gemini' | 'Midjourney' | 'Cursor'
+  | 'Copilot' | 'Llama' | 'Stable Diffusion' | 'Perplexity' | 'Grok'
+  | 'Multiple' | 'Other';
+
+export interface AIExtractionOutput {
+  tool: AITool;
+  use_case: string;
+  prompt_tip: string | null;
+  skill_level: 'beginner' | 'intermediate' | 'advanced';
+  task_type: string[];
+}
+
+export const EXTRACT_AI_SYSTEM_PROMPT = `You extract AI tool information from content about AI tools and prompts.
+
+tool: the primary AI tool discussed. Use "Multiple" if several tools are compared.
+use_case: a short phrase (max 8 words) describing what the AI is being used for.
+prompt_tip: if the content includes a specific prompt or technique, extract it. Otherwise null.
+skill_level: how advanced the content is.
+task_type: what tasks this helps with (e.g. ["writing", "coding", "image-generation", "productivity", "research"]).
+
+Return valid JSON only:
+{
+  "tool": "ChatGPT|Claude|Gemini|Midjourney|Cursor|Copilot|Llama|Stable Diffusion|Perplexity|Grok|Multiple|Other",
+  "use_case": "string",
+  "prompt_tip": "string or null",
+  "skill_level": "beginner|intermediate|advanced",
+  "task_type": ["string"]
+}`;
+
+export function buildExtractAIUserPrompt(title: string, summary: string, tags: string[], transcript: string | null): string {
+  const lines = [`Title: ${title}`, `Summary: ${summary}`, `Tags: ${tags.join(', ')}`];
+  if (transcript) lines.push(`\nTranscript excerpt:\n${transcript.slice(0, 1000)}`);
+  lines.push('\nExtract AI tool metadata.');
+  return lines.join('\n');
+}
+
+// ─── Money extraction (Stage 3 — money section only) ──────────────────────────
+
+export interface MoneyTicker {
+  symbol: string;
+  name: string;
+  type: 'stock' | 'crypto' | 'etf' | 'commodity' | 'forex' | 'other';
+  sentiment: 'bullish' | 'bearish' | 'neutral';
+}
+
+export interface MoneyExtractionOutput {
+  tickers: MoneyTicker[];
+  asset_type: string;
+  tip_type: 'strategy' | 'analysis' | 'news' | 'education' | 'warning' | 'other';
+  time_horizon: 'short-term' | 'medium-term' | 'long-term' | null;
+  risk_level: 'low' | 'medium' | 'high' | null;
+  confidence_note: string;
+}
+
+export const EXTRACT_MONEY_SYSTEM_PROMPT = `You extract financial metadata from investment and money content.
+
+tickers: specific stocks, crypto, ETFs, or commodities mentioned. Use standard symbols (AAPL, BTC, etc.).
+If no specific tickers mentioned, return empty array.
+sentiment: is the content bullish (positive), bearish (negative), or neutral about this asset?
+tip_type: what kind of financial content is this?
+time_horizon: how long is the investment horizon discussed?
+risk_level: implied risk level of the strategy/asset.
+confidence_note: 1 sentence about how reliable/vetted this tip appears to be.
+
+Return valid JSON only:
+{
+  "tickers": [
+    {
+      "symbol": "string",
+      "name": "string (full company/coin name)",
+      "type": "stock|crypto|etf|commodity|forex|other",
+      "sentiment": "bullish|bearish|neutral"
+    }
+  ],
+  "asset_type": "string (e.g. 'Growth stocks', 'DeFi crypto', 'Real estate')",
+  "tip_type": "strategy|analysis|news|education|warning|other",
+  "time_horizon": "short-term|medium-term|long-term or null",
+  "risk_level": "low|medium|high or null",
+  "confidence_note": "string"
+}`;
+
+export function buildExtractMoneyUserPrompt(title: string, summary: string, tags: string[], transcript: string | null): string {
+  const lines = [`Title: ${title}`, `Summary: ${summary}`, `Tags: ${tags.join(', ')}`];
+  if (transcript) lines.push(`\nTranscript excerpt:\n${transcript.slice(0, 1000)}`);
+  lines.push('\nExtract financial metadata and ticker symbols.');
   return lines.join('\n');
 }

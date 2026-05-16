@@ -1,40 +1,40 @@
-/**
- * Add Link screen.
- *
- * The primary input surface for MVP.
- * User pastes a URL (or reads from clipboard), optionally adds a note,
- * and taps Analyze. The app calls POST /analyze synchronously and
- * navigates to the result when ready.
- *
- * Loading state is explicit — analysis takes 5-12s and the user should
- * know something real is happening.
- */
-
 import { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  Pressable,
-  StyleSheet,
-  ActivityIndicator,
-  ScrollView,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, ScrollView, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { Ionicons } from '@expo/vector-icons';
 import { analyzeUrl, analyzeUrls } from '../../lib/api';
-import { colors, radius, typography, spacing, cardShadow } from '../../lib/theme';
+import { colors, radius, spacing, cardShadow } from '../../lib/theme';
 
-const PLATFORM_HINTS = [
-  { label: 'YouTube', icon: '▶', note: 'YouTube video' },
-  { label: 'TikTok', icon: '♪', note: 'TikTok video' },
-  { label: 'Instagram', icon: '◈', note: 'Instagram reel' },
-  { label: 'Web', icon: '○', note: 'Web article' },
+type Section = 'auto' | 'travel' | 'food' | 'ai' | 'money' | 'general';
+
+const SECTION_HINTS: { key: Section; label: string; icon: string; color: string; hint: string }[] = [
+  { key: 'auto',    label: 'Auto',    icon: 'sparkles-outline',    color: colors.textMuted,  hint: 'Let AI decide' },
+  { key: 'travel',  label: 'Travel',  icon: 'map-outline',          color: '#2B8A6E',         hint: 'Drop pins on map' },
+  { key: 'food',    label: 'Food',    icon: 'restaurant-outline',   color: '#C05621',         hint: 'Taste profile + recipe' },
+  { key: 'ai',      label: 'AI',      icon: 'sparkles-outline',     color: '#5B5FD6',         hint: 'Tool + prompt tips' },
+  { key: 'money',   label: 'Money',   icon: 'trending-up-outline',  color: '#1A7F37',         hint: 'Tickers + analysis' },
 ];
+
+const LOADING_MESSAGES: Record<Section, string[]> = {
+  travel:  ['Fetching content…', 'Extracting locations…', 'Dropping pins on map…'],
+  food:    ['Fetching content…', 'Reading with AI…', 'Building taste profile…'],
+  ai:      ['Fetching content…', 'Detecting AI tool…', 'Extracting prompt tips…'],
+  money:   ['Fetching content…', 'Reading with AI…', 'Extracting tickers…'],
+  general: ['Fetching content…', 'Reading with AI…', 'Extracting action steps…'],
+  auto:    ['Fetching content…', 'Reading with AI…', 'Extracting insights…'],
+};
+
+function detectSectionFromUrl(url: string): Section {
+  const u = url.toLowerCase();
+  if (/instagram|tiktok|youtube/.test(u)) return 'auto';
+  if (/tripadvisor|booking|airbnb|hotels|maps\.google|wanderlog/.test(u)) return 'travel';
+  if (/allrecipes|yummly|food52|tasty|delish|seriouseats/.test(u)) return 'food';
+  if (/openai|anthropic|google\.com\/gemini|midjourney|cursor\.sh|huggingface/.test(u)) return 'ai';
+  if (/robinhood|coinbase|binance|tradingview|seekingalpha|investing\.com/.test(u)) return 'money';
+  return 'auto';
+}
 
 export default function AddLinkScreen() {
   const router = useRouter();
@@ -43,148 +43,112 @@ export default function AddLinkScreen() {
 
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
+  const [section, setSection] = useState<Section>('auto');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
 
-  // Auto-fill URL when app is opened via Android share intent (runs once per sharedUrl value)
   useEffect(() => {
     if (sharedUrl && sharedUrl.startsWith('http')) {
-      setUrl(sharedUrl); // replace, not append — prevents duplicates
+      setUrl(sharedUrl);
+      const detected = detectSectionFromUrl(sharedUrl);
+      if (detected !== 'auto') setSection(detected);
     }
   }, [sharedUrl]);
 
   async function pasteFromClipboard() {
     const text = await Clipboard.getStringAsync();
     if (text?.startsWith('http')) {
-      const pasted = text.trim();
-      setUrl((prev) => (prev.trim() ? prev.trimEnd() + '\n' + pasted : pasted));
+      setUrl(text.trim());
+      const detected = detectSectionFromUrl(text);
+      if (detected !== 'auto') setSection(detected);
     } else {
       Alert.alert('Nothing to paste', 'Copy a link first, then tap Paste.');
     }
   }
 
   function parseUrls(input: string): string[] {
-    return input
-      .split(/[\n,]+/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    return input.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
   }
 
   async function handleAnalyze() {
     const urls = parseUrls(url);
-    if (urls.length === 0) {
-      Alert.alert('Paste a link first', 'Enter a URL to analyze.');
-      return;
-    }
-
+    if (urls.length === 0) { Alert.alert('Paste a link first', 'Enter a URL to analyze.'); return; }
     for (const u of urls) {
-      try {
-        new URL(u);
-      } catch {
-        Alert.alert('Invalid URL', `This URL is not valid:\n${u}`);
-        return;
-      }
+      try { new URL(u); } catch { Alert.alert('Invalid URL', `Not a valid URL:\n${u}`); return; }
     }
 
     setLoading(true);
+    const messages = LOADING_MESSAGES[section];
+    setLoadingMessage(messages[0]);
+    const t1 = setTimeout(() => setLoadingMessage(messages[1] ?? messages[0]), 3500);
+    const t2 = setTimeout(() => setLoadingMessage(messages[2] ?? messages[1] ?? messages[0]), 8000);
 
-    const isBatch = urls.length > 1;
-
-    if (isBatch) {
-      setLoadingMessage(`Analyzing 0/${urls.length} links…`);
-    } else {
-      setLoadingMessage('Fetching content…');
-    }
-
-    const msg2 = !isBatch ? setTimeout(() => setLoadingMessage('Reading with AI…'), 3000) : null;
-    const msg3 = !isBatch ? setTimeout(() => setLoadingMessage('Extracting action steps…'), 7000) : null;
+    const manualNote = note.trim() || (section !== 'auto' ? `Section: ${section}` : undefined);
 
     try {
-      if (isBatch) {
-        const results = await analyzeUrls(
-          urls,
-          note.trim() || undefined,
-          (completed, total) => {
-            setLoadingMessage(`Analyzing ${completed}/${total} links…`);
-          },
-        );
-
+      if (urls.length > 1) {
+        const results = await analyzeUrls(urls, manualNote, (c, t) => setLoadingMessage(`Analyzing ${c}/${t}…`));
         await queryClient.invalidateQueries({ queryKey: ['items'] });
-        setUrl('');
-        setNote('');
+        setUrl(''); setNote('');
         router.push(`/items/${results[results.length - 1].item.id}`);
       } else {
-        const result = await analyzeUrl(urls[0], note.trim() || undefined);
+        const result = await analyzeUrl(urls[0], manualNote);
         await queryClient.invalidateQueries({ queryKey: ['items'] });
-        setUrl('');
-        setNote('');
+        setUrl(''); setNote('');
         router.push(`/items/${result.item.id}`);
       }
     } catch (err: any) {
-      Alert.alert(
-        'Analysis failed',
-        err.message ?? 'Something went wrong. Please try again.',
-      );
+      Alert.alert('Analysis failed', err.message ?? 'Something went wrong.');
     } finally {
-      if (msg2) clearTimeout(msg2);
-      if (msg3) clearTimeout(msg3);
-      setLoading(false);
-      setLoadingMessage('');
+      clearTimeout(t1); clearTimeout(t2);
+      setLoading(false); setLoadingMessage('');
     }
   }
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <View style={styles.loadingCircle}>
-          <ActivityIndicator size="large" color={colors.accent} />
+        <View style={[styles.loadingCircle, section !== 'auto' && { backgroundColor: SECTION_HINTS.find(s => s.key === section)?.color + '18' }]}>
+          <ActivityIndicator size="large" color={section !== 'auto' ? SECTION_HINTS.find(s => s.key === section)?.color : colors.accent} />
         </View>
         <Text style={styles.loadingTitle}>Analyzing…</Text>
-        <Text style={styles.loadingSubtitle}>{loadingMessage}</Text>
-        <Text style={styles.loadingHint}>This takes about 10 seconds</Text>
+        <Text style={[styles.loadingSubtitle, { color: section !== 'auto' ? SECTION_HINTS.find(s => s.key === section)?.color : colors.accent }]}>{loadingMessage}</Text>
+        <Text style={styles.loadingHint}>Takes about 10–15 seconds</Text>
       </View>
     );
   }
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Header */}
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.headline}>Save a link</Text>
-        <Text style={styles.subheadline}>
-          Paste one or more links — we'll extract what matters and what to do next.
-        </Text>
+        <Text style={styles.sub}>Paste any link — we'll extract what matters and what to do next.</Text>
 
-        {/* Platform shortcuts — tap to set context */}
-        <View style={styles.hintRow}>
-          {PLATFORM_HINTS.map((h) => (
+        {/* Section selector */}
+        <Text style={styles.fieldLabel}>Save to</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 24 }} contentContainerStyle={{ gap: 8 }}>
+          {SECTION_HINTS.map(s => (
             <Pressable
-              key={h.label}
-              style={[styles.hintChip, note === h.note && styles.hintChipActive]}
-              onPress={() => setNote((prev) => prev === h.note ? '' : h.note)}
+              key={s.key}
+              style={[styles.sectionChip, section === s.key && { backgroundColor: s.color, borderColor: s.color }]}
+              onPress={() => setSection(s.key)}
             >
-              <Text style={styles.hintIcon}>{h.icon}</Text>
-              <Text style={[styles.hintText, note === h.note && styles.hintTextActive]}>
-                {h.label}
-              </Text>
+              <Ionicons name={s.icon as any} size={14} color={section === s.key ? '#fff' : s.color} />
+              <View>
+                <Text style={[styles.sectionChipLabel, section === s.key && { color: '#fff' }]}>{s.label}</Text>
+                <Text style={[styles.sectionChipHint, section === s.key && { color: 'rgba(255,255,255,0.7)' }]}>{s.hint}</Text>
+              </View>
             </Pressable>
           ))}
-        </View>
+        </ScrollView>
 
-        {/* URL input card */}
+        {/* URL input */}
         <View style={styles.inputCard}>
           <Text style={styles.fieldLabel}>Link</Text>
           <View style={styles.urlRow}>
             <TextInput
               style={styles.urlInput}
-              placeholder={"https://\nhttps://\nOne link per line"}
+              placeholder="https://"
               placeholderTextColor={colors.textLight}
               autoCapitalize="none"
               autoCorrect={false}
@@ -199,40 +163,25 @@ export default function AddLinkScreen() {
             </Pressable>
           </View>
 
-          <Text style={styles.fieldLabel}>
-            Context <Text style={styles.optional}>(optional)</Text>
-          </Text>
+          <Text style={styles.fieldLabel}>Context <Text style={{ fontWeight: '400', color: colors.textMuted }}>(optional)</Text></Text>
           <TextInput
             style={styles.noteInput}
-            placeholder="e.g. AI resume side hustle, pasta recipe, travel packing tips"
+            placeholder="Add context to improve AI analysis (e.g. 'Tokyo budget trip', 'vegan pasta recipe')"
             placeholderTextColor={colors.textLight}
             multiline
-            numberOfLines={3}
+            numberOfLines={2}
             value={note}
             onChangeText={setNote}
             maxLength={500}
           />
-          <Text style={styles.noteHint}>
-            Helps when the link doesn't have much text (e.g. Instagram reels).
-          </Text>
         </View>
 
-        {/* Analyze button */}
-        <Pressable
-          style={[styles.analyzeButton, !url.trim() && styles.analyzeButtonDisabled]}
-          onPress={handleAnalyze}
-          disabled={!url.trim()}
-        >
+        <Pressable style={[styles.analyzeButton, !url.trim() && styles.analyzeButtonDisabled]} onPress={handleAnalyze} disabled={!url.trim()}>
           <Text style={styles.analyzeButtonText}>
-            {parseUrls(url).length > 1
-              ? `Analyze ${parseUrls(url).length} links`
-              : 'Analyze'}
+            {parseUrls(url).length > 1 ? `Analyze ${parseUrls(url).length} links` : 'Analyze →'}
           </Text>
-          <Text style={styles.analyzeArrow}>→</Text>
         </Pressable>
-        {!url.trim() && (
-          <Text style={styles.disabledHint}>Paste a link above to continue</Text>
-        )}
+        {!url.trim() && <Text style={styles.disabledHint}>Paste a link above to continue</Text>}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -240,150 +189,26 @@ export default function AddLinkScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: spacing.lg, paddingTop: spacing.md },
-
-  headline: {
-    ...typography.display,
-    marginBottom: 10,
-  },
-  subheadline: {
-    ...typography.body,
-    marginBottom: 24,
-  },
-
-  hintRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 28 },
-  hintChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: colors.surfaceSecondary,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: radius.full,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-  },
-  hintChipActive: {
-    backgroundColor: colors.accentSoft,
-    borderColor: colors.accent,
-  },
-  hintIcon: { fontSize: 12, color: colors.textMuted },
-  hintText: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
-  hintTextActive: { color: colors.accent, fontWeight: '600' },
-  disabledHint: {
-    textAlign: 'center',
-    fontSize: 13,
-    color: colors.textMuted,
-    marginTop: 10,
-  },
-
-  inputCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: 20,
-    marginBottom: 24,
-    ...cardShadow,
-  },
-
-  fieldLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.textPrimary,
-    marginBottom: 8,
-  },
-  optional: {
-    fontWeight: '400',
-    color: colors.textMuted,
-  },
-
-  urlRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 20 },
-  urlInput: {
-    flex: 1,
-    minHeight: 96,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: colors.textPrimary,
-    backgroundColor: colors.bg,
-    textAlignVertical: 'top',
-  },
-  pasteButton: {
-    height: 48,
-    paddingHorizontal: 20,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  content: { padding: spacing.lg, paddingTop: 64 },
+  headline: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, letterSpacing: -0.5, marginBottom: 8 },
+  sub: { fontSize: 15, color: colors.textSecondary, lineHeight: 22, marginBottom: 28 },
+  fieldLabel: { fontSize: 13, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },
+  sectionChip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: radius.lg, backgroundColor: colors.surfaceSecondary, borderWidth: 1.5, borderColor: 'transparent', minWidth: 110 },
+  sectionChipLabel: { fontSize: 13, fontWeight: '700', color: colors.textPrimary },
+  sectionChipHint: { fontSize: 10, color: colors.textMuted, marginTop: 1 },
+  inputCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 20, marginBottom: 24, ...cardShadow, gap: 12 },
+  urlRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
+  urlInput: { flex: 1, minHeight: 80, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: colors.textPrimary, backgroundColor: colors.bg, textAlignVertical: 'top' },
+  pasteButton: { height: 44, paddingHorizontal: 18, backgroundColor: colors.surfaceSecondary, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center' },
   pasteButtonText: { fontSize: 14, color: colors.textPrimary, fontWeight: '600' },
-
-  noteInput: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    padding: 14,
-    fontSize: 15,
-    color: colors.textPrimary,
-    backgroundColor: colors.bg,
-    textAlignVertical: 'top',
-    minHeight: 80,
-    marginBottom: 6,
-  },
-  noteHint: { ...typography.caption, marginBottom: 4 },
-
-  analyzeButton: {
-    height: 56,
-    backgroundColor: colors.accent,
-    borderRadius: radius.full,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    ...cardShadow,
-    shadowOpacity: 0.12,
-  },
+  noteInput: { borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: 12, fontSize: 14, color: colors.textPrimary, backgroundColor: colors.bg, textAlignVertical: 'top', minHeight: 64 },
+  analyzeButton: { height: 56, backgroundColor: colors.accent, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center', ...cardShadow },
   analyzeButtonDisabled: { opacity: 0.35 },
-  analyzeButtonText: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  analyzeArrow: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: '500',
-  },
-
-  // Loading state
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 40,
-  },
-  loadingCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.accentSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingTitle: {
-    ...typography.headline,
-    marginTop: 24,
-  },
-  loadingSubtitle: {
-    fontSize: 15,
-    color: colors.accent,
-    marginTop: 8,
-  },
-  loadingHint: {
-    ...typography.caption,
-    marginTop: 6,
-  },
+  analyzeButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  disabledHint: { textAlign: 'center', fontSize: 13, color: colors.textMuted, marginTop: 10 },
+  loadingContainer: { flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center', padding: 40 },
+  loadingCircle: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.accentSoft, alignItems: 'center', justifyContent: 'center' },
+  loadingTitle: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, marginTop: 24 },
+  loadingSubtitle: { fontSize: 15, color: colors.accent, marginTop: 8 },
+  loadingHint: { fontSize: 13, color: colors.textMuted, marginTop: 6 },
 });

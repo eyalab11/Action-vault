@@ -6,27 +6,204 @@
  */
 
 import { useState } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  Pressable,
-  StyleSheet,
-  Linking,
-  Alert,
-  TextInput,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Linking, Alert, TextInput, ActivityIndicator } from 'react-native';
+import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  getItem,
-  updateItem,
-  updateTask,
-  deleteItem,
-  type ActionTask,
-} from '../../lib/api';
+import { Ionicons } from '@expo/vector-icons';
+import { getItem, updateItem, updateTask, deleteItem, type ActionTask, type Item } from '../../lib/api';
 import { colors, radius, typography, spacing, cardShadow } from '../../lib/theme';
+
+const PIN_COLORS: Record<string, string> = {
+  restaurant: '#E53E3E', landmark: '#3182CE', hotel: '#805AD5',
+  activity: '#D69E2E', neighborhood: '#38A169', other: '#718096',
+};
+
+function SectionPanel({ item }: { item: Item }) {
+  const section = item.section ?? 'general';
+  const d = item.section_data;
+  if (!d || section === 'general') return null;
+
+  if (section === 'travel') {
+    const locs = d.locations ?? [];
+    if (locs.length === 0) return null;
+    const avgLat = locs.reduce((s, l) => s + l.lat, 0) / locs.length;
+    const avgLng = locs.reduce((s, l) => s + l.lng, 0) / locs.length;
+    return (
+      <View style={panelStyles.panel}>
+        <Text style={panelStyles.panelTitle}>{locs.length} location{locs.length > 1 ? 's' : ''} on map</Text>
+        <MapView
+          style={panelStyles.miniMap}
+          provider={PROVIDER_DEFAULT}
+          initialRegion={{ latitude: avgLat, longitude: avgLng, latitudeDelta: locs.length > 1 ? 8 : 0.3, longitudeDelta: locs.length > 1 ? 8 : 0.3 }}
+          scrollEnabled={false}
+          zoomEnabled={false}
+        >
+          {locs.map((loc, i) => (
+            <Marker key={i} coordinate={{ latitude: loc.lat, longitude: loc.lng }}>
+              <View style={[panelStyles.pin, { backgroundColor: PIN_COLORS[loc.type] ?? '#718096' }]}>
+                <Ionicons name="location" size={12} color="#fff" />
+              </View>
+            </Marker>
+          ))}
+        </MapView>
+        {locs.map((loc, i) => (
+          <View key={i} style={panelStyles.locationRow}>
+            <View style={[panelStyles.locationDot, { backgroundColor: PIN_COLORS[loc.type] ?? '#718096' }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={panelStyles.locationName}>{loc.name}</Text>
+              <Text style={panelStyles.locationDesc} numberOfLines={1}>{loc.description}</Text>
+            </View>
+          </View>
+        ))}
+        {d.best_season && <Text style={panelStyles.meta}>Best time to visit: {d.best_season}</Text>}
+      </View>
+    );
+  }
+
+  if (section === 'food') {
+    const tastes = d.taste_profile ? Object.entries(d.taste_profile).filter(([, v]) => v).map(([k]) => k) : [];
+    const TASTE_EMOJI: Record<string, string> = { sweet: '🍰', salty: '🧂', spicy: '🌶', savory: '🍖', sour: '🍋', umami: '🍜', bitter: '🫖' };
+    return (
+      <View style={panelStyles.panel}>
+        <Text style={panelStyles.panelTitle}>Taste profile</Text>
+        <View style={panelStyles.tasteRow}>
+          {tastes.map(t => (
+            <View key={t} style={panelStyles.tastePill}>
+              <Text style={{ fontSize: 16 }}>{TASTE_EMOJI[t] ?? '🍽'}</Text>
+              <Text style={panelStyles.tastePillText}>{t}</Text>
+            </View>
+          ))}
+        </View>
+        <View style={panelStyles.metaGrid}>
+          {d.cuisine && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Cuisine</Text><Text style={panelStyles.metaValue}>{d.cuisine}</Text></View>}
+          {d.cook_time_minutes && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Time</Text><Text style={panelStyles.metaValue}>{d.cook_time_minutes < 60 ? `${d.cook_time_minutes}m` : `${Math.floor(d.cook_time_minutes/60)}h`}</Text></View>}
+          {d.difficulty && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Difficulty</Text><Text style={panelStyles.metaValue}>{d.difficulty}</Text></View>}
+          {d.ingredient_count && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Ingredients</Text><Text style={panelStyles.metaValue}>{d.ingredient_count}</Text></View>}
+        </View>
+        {(d.dietary ?? []).length > 0 && (
+          <View style={panelStyles.dietRow}>
+            {d.dietary!.map(t => <View key={t} style={panelStyles.dietTag}><Text style={panelStyles.dietTagText}>{t}</Text></View>)}
+          </View>
+        )}
+        {(d.mood_tags ?? []).length > 0 && (
+          <View style={panelStyles.dietRow}>
+            {d.mood_tags!.map(t => <View key={t} style={panelStyles.moodTag}><Text style={panelStyles.moodTagText}>{t}</Text></View>)}
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  if (section === 'ai') {
+    const AI_COLORS: Record<string, string> = { ChatGPT: '#10A37F', Claude: '#D97706', Gemini: '#4285F4', Midjourney: '#7C3AED', Cursor: '#1D4ED8', Other: '#6B6B6B' };
+    const toolColor = AI_COLORS[d.tool ?? 'Other'] ?? '#6B6B6B';
+    return (
+      <View style={panelStyles.panel}>
+        <View style={panelStyles.aiHeader}>
+          <View style={[panelStyles.toolBadge, { backgroundColor: toolColor }]}>
+            <Text style={panelStyles.toolBadgeText}>{d.tool ?? 'AI Tool'}</Text>
+          </View>
+          {d.skill_level && <View style={panelStyles.skillBadge}><Text style={panelStyles.skillText}>{d.skill_level}</Text></View>}
+        </View>
+        {d.use_case && <Text style={panelStyles.useCase}><Text style={{ fontWeight: '700' }}>Use case: </Text>{d.use_case}</Text>}
+        {(d.task_type ?? []).length > 0 && (
+          <View style={panelStyles.tasteRow}>
+            {d.task_type!.map(t => <View key={t} style={panelStyles.taskTag}><Text style={panelStyles.taskTagText}>{t}</Text></View>)}
+          </View>
+        )}
+        {d.prompt_tip && (
+          <View style={panelStyles.promptBox}>
+            <Text style={panelStyles.promptLabel}>PROMPT TIP</Text>
+            <Text style={panelStyles.promptText}>{d.prompt_tip}</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  if (section === 'money') {
+    const tickers = d.tickers ?? [];
+    const SENT = { bullish: { color: '#1A7F37', bg: '#E6F4EA', label: '▲ Bullish' }, bearish: { color: '#E53E3E', bg: '#FEE2E2', label: '▼ Bearish' }, neutral: { color: '#64748B', bg: '#F1F5F9', label: '— Neutral' } };
+    return (
+      <View style={panelStyles.panel}>
+        {tickers.length > 0 && (
+          <>
+            <Text style={panelStyles.panelTitle}>Tickers mentioned</Text>
+            <View style={panelStyles.tickersRow}>
+              {tickers.map(t => {
+                const s = SENT[t.sentiment] ?? SENT.neutral;
+                return (
+                  <View key={t.symbol} style={[panelStyles.ticker, { backgroundColor: s.bg }]}>
+                    <Text style={[panelStyles.tickerSymbol, { color: s.color }]}>${t.symbol}</Text>
+                    <Text style={[panelStyles.tickerSent, { color: s.color }]}>{s.label}</Text>
+                    <Text style={[panelStyles.tickerType, { color: s.color }]}>{t.type}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        )}
+        <View style={panelStyles.metaGrid}>
+          {d.asset_type && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Asset type</Text><Text style={panelStyles.metaValue}>{d.asset_type}</Text></View>}
+          {d.tip_type && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Tip type</Text><Text style={panelStyles.metaValue}>{d.tip_type}</Text></View>}
+          {d.time_horizon && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Horizon</Text><Text style={panelStyles.metaValue}>{d.time_horizon}</Text></View>}
+          {d.risk_level && <View style={panelStyles.metaItem}><Text style={panelStyles.metaLabel}>Risk</Text><Text style={panelStyles.metaValue}>{d.risk_level}</Text></View>}
+        </View>
+        {d.confidence_note && (
+          <View style={panelStyles.confidenceBox}>
+            <Ionicons name="information-circle-outline" size={14} color={colors.textMuted} />
+            <Text style={panelStyles.confidenceNote}>{d.confidence_note}</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  return null;
+}
+
+const panelStyles = StyleSheet.create({
+  panel: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, marginBottom: 20, ...cardShadow, gap: 12 },
+  panelTitle: { fontSize: 13, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 },
+  miniMap: { height: 180, borderRadius: radius.md, overflow: 'hidden' },
+  pin: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
+  locationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  locationDot: { width: 8, height: 8, borderRadius: 4, marginTop: 5 },
+  locationName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  locationDesc: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
+  meta: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
+  tasteRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tastePill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.surfaceSecondary, paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.full },
+  tastePillText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary, textTransform: 'capitalize' },
+  metaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  metaItem: { gap: 2 },
+  metaLabel: { fontSize: 10, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  metaValue: { fontSize: 14, fontWeight: '600', color: colors.textPrimary, textTransform: 'capitalize' },
+  dietRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  dietTag: { backgroundColor: '#38A169' + '18', paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
+  dietTagText: { fontSize: 11, color: '#38A169', fontWeight: '600' },
+  moodTag: { backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
+  moodTagText: { fontSize: 11, color: colors.accent, fontWeight: '600' },
+  aiHeader: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  toolBadge: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.full },
+  toolBadgeText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  skillBadge: { backgroundColor: colors.surfaceSecondary, paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm },
+  skillText: { fontSize: 12, color: colors.textMuted, fontWeight: '600', textTransform: 'capitalize' },
+  useCase: { fontSize: 14, color: colors.textSecondary, lineHeight: 20 },
+  taskTag: { backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
+  taskTagText: { fontSize: 11, color: colors.accent, fontWeight: '600' },
+  promptBox: { backgroundColor: '#1A1A2E', borderRadius: radius.md, padding: 14, gap: 6 },
+  promptLabel: { fontSize: 9, fontWeight: '700', color: 'rgba(255,255,255,0.4)', letterSpacing: 1 },
+  promptText: { fontSize: 13, color: '#E2E8F0', lineHeight: 20, fontFamily: 'monospace' },
+  tickersRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  ticker: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md, gap: 2 },
+  tickerSymbol: { fontSize: 16, fontWeight: '800', fontFamily: 'monospace' },
+  tickerSent: { fontSize: 11, fontWeight: '600' },
+  tickerType: { fontSize: 10, opacity: 0.7, textTransform: 'uppercase' },
+  confidenceBox: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
+  confidenceNote: { flex: 1, fontSize: 12, color: colors.textMuted, lineHeight: 18 },
+});
 
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -215,6 +392,9 @@ export default function ItemDetailScreen() {
             </Text>
           </View>
         )}
+
+        {/* ── Section-specific data ────────────────────────── */}
+        <SectionPanel item={item} />
 
         {/* ── Action Steps ─────────────────────────────────── */}
         {item.actionable && totalCount > 0 && (
