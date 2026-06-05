@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, ScrollView, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
-import { analyzeUrl, analyzeUrls } from '../../lib/api';
+import { analyzeUrl, analyzeUrls, listItems, type Item } from '../../lib/api';
+import { findExistingItem, normalizeUrl } from '../../lib/dedup';
 import { colors, radius, spacing, cardShadow } from '../../lib/theme';
 
 type Section = 'auto' | 'travel' | 'food' | 'ai' | 'money' | 'general';
@@ -28,11 +29,12 @@ const LOADING_MESSAGES: Record<Section, string[]> = {
 
 function detectSectionFromUrl(url: string): Section {
   const u = url.toLowerCase();
-  if (/instagram|tiktok|youtube/.test(u)) return 'auto';
-  if (/tripadvisor|booking|airbnb|hotels|maps\.google|wanderlog/.test(u)) return 'travel';
-  if (/allrecipes|yummly|food52|tasty|delish|seriouseats/.test(u)) return 'food';
-  if (/openai|anthropic|google\.com\/gemini|midjourney|cursor\.sh|huggingface/.test(u)) return 'ai';
-  if (/robinhood|coinbase|binance|tradingview|seekingalpha|investing\.com/.test(u)) return 'money';
+  // Social platforms — let backend AI decide based on content
+  if (/instagram|tiktok|youtube|youtu\.be|twitter\.com|x\.com|threads\.net/.test(u)) return 'auto';
+  if (/tripadvisor|booking|airbnb|hotels|maps\.google|wanderlog|expedia|kayak|trivago/.test(u)) return 'travel';
+  if (/allrecipes|yummly|food52|tasty|delish|seriouseats|bonappetit|epicurious|nytcooking/.test(u)) return 'food';
+  if (/openai|anthropic|claude\.ai|gemini\.google|midjourney|cursor\.sh|huggingface|perplexity|chat\.com/.test(u)) return 'ai';
+  if (/robinhood|coinbase|binance|tradingview|seekingalpha|investing\.com|finance\.yahoo|bloomberg/.test(u)) return 'money';
   return 'auto';
 }
 
@@ -46,13 +48,24 @@ export default function AddLinkScreen() {
   const [section, setSection] = useState<Section>('auto');
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+  const autoAnalyzedRef = useRef<string | null>(null);
 
+  // When a shared URL arrives: prefill, detect section, and auto-analyze.
   useEffect(() => {
-    if (sharedUrl && sharedUrl.startsWith('http')) {
-      setUrl(sharedUrl);
-      const detected = detectSectionFromUrl(sharedUrl);
-      if (detected !== 'auto') setSection(detected);
-    }
+    if (!sharedUrl) return;
+    const match = sharedUrl.match(/https?:\/\/[^\s"'<>]+/);
+    const cleanUrl = match ? match[0] : null;
+    if (!cleanUrl) return;
+    if (autoAnalyzedRef.current === cleanUrl) return; // already kicked off
+    autoAnalyzedRef.current = cleanUrl;
+
+    setUrl(cleanUrl);
+    const detected = detectSectionFromUrl(cleanUrl);
+    const initialSection: Section = detected !== 'auto' ? detected : 'auto';
+    if (detected !== 'auto') setSection(detected);
+
+    // Kick off analysis immediately — user shouldn't need an extra tap.
+    runAnalyze([cleanUrl], undefined, initialSection);
   }, [sharedUrl]);
 
   async function pasteFromClipboard() {
@@ -70,24 +83,54 @@ export default function AddLinkScreen() {
     return input.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
   }
 
-  async function handleAnalyze() {
-    const urls = parseUrls(url);
+  /**
+   * Check whether a URL is already saved. We consult the React Query cache first
+   * (no network) and only fall back to a fresh fetch if cache is empty. Returns
+   * the existing item if found, null otherwise.
+   */
+  async function checkExisting(rawUrl: string): Promise<Item | null> {
+    const cached = queryClient.getQueryData<{ items: Item[] } | undefined>(['items', 'all']);
+    const fromCache = cached?.items ? findExistingItem(cached.items, rawUrl) : null;
+    if (fromCache) return fromCache;
+    // Cache miss — pull fresh once.
+    try {
+      const fresh = await queryClient.fetchQuery({
+        queryKey: ['items', 'all'],
+        queryFn: () => listItems({ limit: 100 }),
+      });
+      return findExistingItem(fresh.items, rawUrl);
+    } catch {
+      return null;
+    }
+  }
+
+  async function runAnalyze(urls: string[], manualNote: string | undefined, sectionForLoad: Section) {
     if (urls.length === 0) { Alert.alert('Paste a link first', 'Enter a URL to analyze.'); return; }
     for (const u of urls) {
       try { new URL(u); } catch { Alert.alert('Invalid URL', `Not a valid URL:\n${u}`); return; }
     }
 
     setLoading(true);
-    const messages = LOADING_MESSAGES[section];
+    const messages = LOADING_MESSAGES[sectionForLoad];
     setLoadingMessage(messages[0]);
     const t1 = setTimeout(() => setLoadingMessage(messages[1] ?? messages[0]), 3500);
     const t2 = setTimeout(() => setLoadingMessage(messages[2] ?? messages[1] ?? messages[0]), 8000);
 
-    const manualNote = note.trim() || undefined;
-    // Pass explicit section so the backend respects user's vault choice
-    const explicitSection = section !== 'auto' ? section : undefined;
-
     try {
+      // Dedup: if there's exactly one URL and we've already saved it, jump to the existing item.
+      if (urls.length === 1) {
+        const existing = await checkExisting(urls[0]);
+        if (existing) {
+          setLoading(false); setLoadingMessage('');
+          setUrl(''); setNote('');
+          router.push(`/items/${existing.id}`);
+          return;
+        }
+      }
+
+      // Pass explicit section so the backend respects user's vault choice; 'auto' lets backend decide.
+      const explicitSection = sectionForLoad !== 'auto' ? sectionForLoad : undefined;
+
       if (urls.length > 1) {
         const results = await analyzeUrls(urls, manualNote, (c, t) => setLoadingMessage(`Analyzing ${c}/${t}…`), explicitSection);
         await queryClient.invalidateQueries({ queryKey: ['items'] });
@@ -105,6 +148,10 @@ export default function AddLinkScreen() {
       clearTimeout(t1); clearTimeout(t2);
       setLoading(false); setLoadingMessage('');
     }
+  }
+
+  async function handleAnalyze() {
+    return runAnalyze(parseUrls(url), note.trim() || undefined, section);
   }
 
   if (loading) {
@@ -178,7 +225,7 @@ export default function AddLinkScreen() {
           />
         </View>
 
-        <Pressable style={[styles.analyzeButton, !url.trim() && styles.analyzeButtonDisabled]} onPress={handleAnalyze} disabled={!url.trim()}>
+        <Pressable style={[styles.analyzeButton, (!url.trim() || loading) && styles.analyzeButtonDisabled]} onPress={handleAnalyze} disabled={!url.trim() || loading}>
           <Text style={styles.analyzeButtonText}>
             {parseUrls(url).length > 1 ? `Analyze ${parseUrls(url).length} links` : 'Analyze →'}
           </Text>

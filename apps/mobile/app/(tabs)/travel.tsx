@@ -8,6 +8,8 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item } from '../../lib/api';
+import { effectiveSection } from '../../lib/sections';
+import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
 
 const PIN_COLORS: Record<string, string> = {
@@ -28,9 +30,16 @@ function formatAge(d: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-/** Build a self-contained Leaflet HTML page with all location pins baked in. */
+/**
+ * Build a self-contained Leaflet HTML page with all location pins baked in.
+ *
+ * Reliability notes:
+ *  - Loads Leaflet from cdnjs (Cloudflare) — more reliable than unpkg on mobile networks.
+ *  - Falls back to jsdelivr if cdnjs fails.
+ *  - Posts {type:'ready'} once the map renders, {type:'error', msg} if Leaflet won't load.
+ *  - Uses both CartoCDN and OSM tiles so even if one fails, the other shows.
+ */
 function buildMapHtml(items: Item[]): string {
-  // Flatten all locations tagged with their parent item id
   const pins = items.flatMap(item =>
     (item.section_data?.locations ?? []).map(loc => ({
       id: item.id,
@@ -51,16 +60,17 @@ function buildMapHtml(items: Item[]): string {
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, #map { width: 100%; height: 100%; }
+    #fallback { display:none; position:fixed; inset:0; padding:24px; font-family:-apple-system,Roboto,sans-serif; color:#1A1A1A; background:#FAFAF8; }
+    #fallback h2 { font-size:17px; margin-bottom:8px; }
+    #fallback p { font-size:14px; color:#666; line-height:1.5; }
     .custom-pin {
       width: 28px; height: 28px; border-radius: 50%;
       border: 2.5px solid #fff;
       box-shadow: 0 2px 6px rgba(0,0,0,0.35);
-      display: flex; align-items: center; justify-content: center;
     }
     .leaflet-popup-content-wrapper {
       border-radius: 12px; padding: 0; overflow: hidden;
@@ -80,56 +90,116 @@ function buildMapHtml(items: Item[]): string {
 </head>
 <body>
 <div id="map"></div>
+<div id="fallback">
+  <h2>Map couldn't load</h2>
+  <p>We need an internet connection to draw the map. Pull down to retry, or use the list below.</p>
+</div>
 <script>
-  var pins = ${pinsJson};
-
-  var map = L.map('map', { zoomControl: true, attributionControl: false });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19
-  }).addTo(map);
-
-  if (pins.length === 0) {
-    map.setView([20, 10], 2);
-  }
-
-  var bounds = [];
-
-  pins.forEach(function(pin) {
-    var el = document.createElement('div');
-    el.className = 'custom-pin';
-    el.style.backgroundColor = pin.color;
-
-    var icon = L.divIcon({
-      html: el.outerHTML,
-      iconSize: [28, 28],
-      iconAnchor: [14, 14],
-      className: ''
-    });
-
-    var marker = L.marker([pin.lat, pin.lng], { icon: icon }).addTo(map);
-
-    var popupHtml =
-      '<div class="popup-inner">' +
-        '<div class="popup-title">' + pin.name + '</div>' +
-        '<div class="popup-sub">' + pin.title + (pin.summary ? '<br>' + pin.summary : '') + '</div>' +
-      '</div>' +
-      '<button class="popup-btn" onclick="openItem(\'' + pin.id + '\')">View details →</button>';
-
-    marker.bindPopup(popupHtml, { maxWidth: 260 });
-    bounds.push([pin.lat, pin.lng]);
-  });
-
-  if (bounds.length === 1) {
-    map.setView(bounds[0], 13);
-  } else if (bounds.length > 1) {
-    map.fitBounds(bounds, { padding: [40, 40] });
-  }
-
-  function openItem(id) {
+  // Tell the RN host what's happening.
+  function notify(type, payload) {
     if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'openItem', id: id }));
+      window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: type }, payload || {})));
     }
   }
+
+  // Try CDNs in order. Resolve on first success; reject if all fail.
+  function loadScript(urls) {
+    return new Promise(function(resolve, reject) {
+      var i = 0;
+      function tryNext() {
+        if (i >= urls.length) { reject(new Error('all CDNs failed')); return; }
+        var s = document.createElement('script');
+        s.src = urls[i++];
+        s.async = false;
+        s.onload = resolve;
+        s.onerror = function() { tryNext(); };
+        document.head.appendChild(s);
+      }
+      tryNext();
+    });
+  }
+
+  var LEAFLET_CDNS = [
+    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js',
+    'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js',
+    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  ];
+
+  loadScript(LEAFLET_CDNS).then(function() {
+    initMap();
+  }).catch(function(err) {
+    document.getElementById('map').style.display = 'none';
+    document.getElementById('fallback').style.display = 'block';
+    notify('error', { msg: String(err && err.message || err) });
+  });
+
+  function initMap() {
+    var pins = ${pinsJson};
+
+    var map = L.map('map', { zoomControl: true, attributionControl: false });
+
+    // Primary tile layer (Carto light) with OSM fallback if it fails.
+    var primary = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      subdomains: 'abcd',
+    });
+    var fallback = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+
+    var tilesLoaded = false;
+    primary.on('load', function() { tilesLoaded = true; });
+    primary.addTo(map);
+    // If primary tiles haven't appeared after 4s, swap to OSM.
+    setTimeout(function() {
+      if (!tilesLoaded) {
+        map.removeLayer(primary);
+        fallback.addTo(map);
+      }
+    }, 4000);
+
+    if (pins.length === 0) {
+      map.setView([20, 10], 2);
+    }
+
+    var bounds = [];
+    pins.forEach(function(pin) {
+      var el = document.createElement('div');
+      el.className = 'custom-pin';
+      el.style.backgroundColor = pin.color;
+
+      var icon = L.divIcon({
+        html: el.outerHTML,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+        className: '',
+      });
+
+      var marker = L.marker([pin.lat, pin.lng], { icon: icon }).addTo(map);
+      var popupHtml =
+        '<div class="popup-inner">' +
+          '<div class="popup-title">' + pin.name + '</div>' +
+          '<div class="popup-sub">' + pin.title + (pin.summary ? '<br>' + pin.summary : '') + '</div>' +
+        '</div>' +
+        '<button class="popup-btn" onclick="openItem(\\'' + pin.id + '\\')">View details →</button>';
+      marker.bindPopup(popupHtml, { maxWidth: 260 });
+      bounds.push([pin.lat, pin.lng]);
+    });
+
+    if (bounds.length === 1) {
+      map.setView(bounds[0], 13);
+    } else if (bounds.length > 1) {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+
+    // Make sure Leaflet measures the container correctly after RN layout.
+    setTimeout(function() { map.invalidateSize(); }, 50);
+    setTimeout(function() { map.invalidateSize(); }, 500);
+
+    notify('ready', { pins: pins.length });
+  }
+
+  window.openItem = function(id) {
+    notify('openItem', { id: id });
+  };
 </script>
 </body>
 </html>`;
@@ -138,13 +208,15 @@ function buildMapHtml(items: Item[]): string {
 export default function TravelScreen() {
   const router = useRouter();
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [mapState, setMapState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'travel'],
-    queryFn: () => listItems({ section: 'travel', limit: 200 }),
+    queryKey: ['items', 'all'],
+    queryFn: () => listItems({ limit: 100 }),
   });
 
-  const items = data?.items ?? [];
+  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'travel'));
+  const itemsWithoutPins = items.filter(i => !(i.section_data?.locations?.length));
   const totalPins = items.reduce((n, item) => n + (item.section_data?.locations?.length ?? 0), 0);
   const allCountries = [
     ...new Set(
@@ -161,6 +233,10 @@ export default function TravelScreen() {
       if (msg.type === 'openItem') {
         const item = items.find(i => i.id === msg.id);
         if (item) setSelectedItem(item);
+      } else if (msg.type === 'ready') {
+        setMapState('ready');
+      } else if (msg.type === 'error') {
+        setMapState('error');
       }
     } catch {}
   }
@@ -186,19 +262,29 @@ export default function TravelScreen() {
       </View>
 
       {/* Map */}
-      <WebView
-        style={styles.map}
-        source={{ html: buildMapHtml(items) }}
-        onMessage={handleWebMessage}
-        javaScriptEnabled
-        domStorageEnabled
-        originWhitelist={['*']}
-        mixedContentMode="always"
-      />
+      <View style={styles.map}>
+        <WebView
+          style={{ flex: 1 }}
+          source={{ html: buildMapHtml(items) }}
+          onMessage={handleWebMessage}
+          onError={() => setMapState('error')}
+          onHttpError={() => setMapState('error')}
+          javaScriptEnabled
+          domStorageEnabled
+          originWhitelist={['*']}
+          mixedContentMode="always"
+        />
+        {mapState === 'loading' && (
+          <View style={styles.mapOverlay} pointerEvents="none">
+            <ActivityIndicator color={colors.accent} size="large" />
+            <Text style={styles.mapOverlayText}>Loading map…</Text>
+          </View>
+        )}
+      </View>
 
-      {/* Empty state overlay */}
+      {/* Empty state overlay — no travel items at all */}
       {items.length === 0 && (
-        <View style={styles.emptyOverlay}>
+        <View style={styles.emptyOverlay} pointerEvents="box-none">
           <View style={styles.emptyCard}>
             <Ionicons name="map-outline" size={40} color={colors.accent} />
             <Text style={styles.emptyTitle}>No travel saves yet</Text>
@@ -206,6 +292,19 @@ export default function TravelScreen() {
             <Pressable style={styles.emptyBtn} onPress={() => router.push('/(tabs)/add')}>
               <Text style={styles.emptyBtnText}>Save a travel link →</Text>
             </Pressable>
+          </View>
+        </View>
+      )}
+
+      {/* No-pins overlay — items exist but no coordinates were extracted yet */}
+      {items.length > 0 && totalPins === 0 && (
+        <View style={styles.noPinsOverlay} pointerEvents="box-none">
+          <View style={styles.noPinsCard}>
+            <Ionicons name="location-outline" size={28} color={colors.accent} />
+            <Text style={styles.noPinsTitle}>No locations yet</Text>
+            <Text style={styles.noPinsSub}>
+              You have {items.length} travel save{items.length === 1 ? '' : 's'}, but the AI hasn't tagged them with coordinates. Tap any below to open it.
+            </Text>
           </View>
         </View>
       )}
@@ -293,6 +392,12 @@ const styles = StyleSheet.create({
 
   // Empty state
   emptyOverlay: { position: 'absolute', top: 120, left: spacing.lg, right: spacing.lg, alignItems: 'center' },
+  noPinsOverlay: { position: 'absolute', top: 120, left: spacing.lg, right: spacing.lg, alignItems: 'center' },
+  noPinsCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 18, alignItems: 'center', gap: 6, ...cardShadow, maxWidth: 320 },
+  noPinsTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  noPinsSub: { fontSize: 13, color: colors.textMuted, textAlign: 'center', lineHeight: 18 },
+  mapOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: 'rgba(250,250,248,0.85)' },
+  mapOverlayText: { fontSize: 14, color: colors.textMuted, fontWeight: '600' },
   emptyCard: { backgroundColor: colors.surface, borderRadius: radius.xl, padding: 32, alignItems: 'center', gap: 12, ...cardShadow },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
   emptySub: { fontSize: 14, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },

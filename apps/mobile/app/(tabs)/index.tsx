@@ -4,6 +4,8 @@ import { useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item, type Section } from '../../lib/api';
+import { effectiveSection } from '../../lib/sections';
+import { dedupItems } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow, typography } from '../../lib/theme';
 
 const SECTIONS: { key: string; route: string; label: string; icon: string; color: string; bg: string }[] = [
@@ -38,15 +40,17 @@ export default function HomeScreen() {
     return () => sub.remove();
   }, [queryClient]);
 
-  const { data, isLoading } = useQuery({ queryKey: ['items', 'all'], queryFn: () => listItems({ limit: 50 }) });
-  const items = data?.items ?? [];
+  const { data, isLoading } = useQuery({ queryKey: ['items', 'all'], queryFn: () => listItems({ limit: 100 }) });
+  const rawItems = data?.items ?? [];
+
+  // Dedup: many shares of the same URL collapse into one card with a "× N" badge.
+  const deduped = dedupItems(rawItems);
+  const duplicateCount = rawItems.length - deduped.length;
 
   const countBySection = SECTIONS.reduce((acc, s) => {
-    acc[s.key] = items.filter(i => (i.section ?? 'general') === s.key).length;
+    acc[s.key] = deduped.filter(i => effectiveSection(i) === s.key).length;
     return acc;
   }, {} as Record<string, number>);
-
-  const recent = [...items].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 5);
 
   if (isLoading) return (
     <View style={styles.center}><ActivityIndicator color={colors.accent} /></View>
@@ -55,7 +59,10 @@ export default function HomeScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <Text style={styles.greeting}>Your Vault</Text>
-      <Text style={styles.sub}>{items.length} saved {items.length === 1 ? 'item' : 'items'}</Text>
+      <Text style={styles.sub}>
+        {deduped.length} unique {deduped.length === 1 ? 'item' : 'items'}
+        {duplicateCount > 0 ? ` · ${duplicateCount} duplicate${duplicateCount === 1 ? '' : 's'} merged` : ''}
+      </Text>
 
       {/* Section grid */}
       <View style={styles.sectionGrid}>
@@ -74,12 +81,15 @@ export default function HomeScreen() {
         ))}
       </View>
 
-      {/* Recent saves */}
-      {recent.length > 0 && (
+      {/* All items — this is the "see everything" view. No truncation. */}
+      {deduped.length > 0 && (
         <>
-          <Text style={styles.sectionTitle}>Recently saved</Text>
-          {recent.map(item => {
-            const sec = SECTIONS.find(s => s.key === (item.section ?? 'general')) ?? { color: '#6B6B6B', label: 'General' };
+          <View style={styles.allHeader}>
+            <Text style={styles.sectionTitle}>All saves</Text>
+            <Text style={styles.allCount}>{deduped.length}</Text>
+          </View>
+          {deduped.map(item => {
+            const sec = SECTIONS.find(s => s.key === effectiveSection(item)) ?? { color: '#6B6B6B', label: 'General' };
             return (
               <Pressable key={item.id} style={styles.recentCard} onPress={() => router.push(`/items/${item.id}`)}>
                 <View style={[styles.recentDot, { backgroundColor: sec.color }]} />
@@ -87,6 +97,11 @@ export default function HomeScreen() {
                   <Text style={styles.recentTitle} numberOfLines={1}>{item.title ?? item.source_url}</Text>
                   <Text style={styles.recentMeta}>{sec.label} · {formatAge(item.created_at)}</Text>
                 </View>
+                {item.dupCount > 1 && (
+                  <View style={styles.dupBadge}>
+                    <Text style={styles.dupBadgeText}>×{item.dupCount}</Text>
+                  </View>
+                )}
                 <Ionicons name="chevron-forward" size={16} color={colors.textLight} />
               </Pressable>
             );
@@ -94,7 +109,7 @@ export default function HomeScreen() {
         </>
       )}
 
-      {items.length === 0 && (
+      {deduped.length === 0 && (
         <View style={styles.emptyState}>
           <Ionicons name="lock-closed-outline" size={48} color={colors.accent} />
           <Text style={styles.emptyTitle}>Your vault is empty</Text>
@@ -120,11 +135,15 @@ const styles = StyleSheet.create({
   sectionLabel: { fontSize: 15, fontWeight: '700' },
   sectionCount: { fontSize: 24, fontWeight: '700' },
   sectionTitle: { fontSize: 17, fontWeight: '700', color: colors.textPrimary, marginBottom: 12 },
+  allHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 },
+  allCount: { fontSize: 13, fontWeight: '700', color: colors.textMuted },
   recentCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, marginBottom: 8, gap: 12, ...cardShadow },
   recentDot: { width: 8, height: 8, borderRadius: 4 },
   recentBody: { flex: 1 },
   recentTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
   recentMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  dupBadge: { backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  dupBadgeText: { fontSize: 11, fontWeight: '700', color: colors.accent, letterSpacing: 0.3 },
   emptyState: { alignItems: 'center', paddingTop: 60, gap: 12 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
   emptySub: { fontSize: 14, color: colors.textMuted },

@@ -4,6 +4,8 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item, type MoneyTicker } from '../../lib/api';
+import { effectiveSection } from '../../lib/sections';
+import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
 
 type AssetFilter = 'all' | 'stock' | 'crypto' | 'etf' | 'real estate' | 'other';
@@ -40,11 +42,11 @@ export default function MoneyScreen() {
   const [activeFilter, setActiveFilter] = useState<AssetFilter>('all');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'money'],
-    queryFn: () => listItems({ section: 'money', limit: 200 }),
+    queryKey: ['items', 'all'],
+    queryFn: () => listItems({ limit: 100 }),
   });
 
-  const items = data?.items ?? [];
+  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'money'));
   const filtered = activeFilter === 'all'
     ? items
     : items.filter(i => {
@@ -63,7 +65,7 @@ export default function MoneyScreen() {
     );
   }
 
-  function renderCard({ item }: { item: Item }) {
+  function renderCard({ item }: { item: DedupedItem }) {
     const d = item.section_data;
     const tickers = d?.tickers ?? [];
     const risk = d?.risk_level;
@@ -72,6 +74,9 @@ export default function MoneyScreen() {
 
     return (
       <Pressable style={styles.card} onPress={() => router.push(`/items/${item.id}`)}>
+        {item.dupCount > 1 && (
+          <View style={styles.dupBadge}><Text style={styles.dupBadgeText}>saved ×{item.dupCount}</Text></View>
+        )}
         {/* Header badges */}
         <View style={styles.cardHeader}>
           {tipType && tipType !== 'other' && (
@@ -176,7 +181,9 @@ const styles = StyleSheet.create({
   filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.full, backgroundColor: colors.surfaceSecondary },
   filterText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
   listContent: { padding: spacing.lg, gap: 14 },
-  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 10 },
+  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 10, position: 'relative' },
+  dupBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, zIndex: 2 },
+  dupBadgeText: { fontSize: 10, fontWeight: '700', color: colors.accent, letterSpacing: 0.3 },
   cardHeader: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   tipTypeBadge: { backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
   tipTypeText: { fontSize: 11, color: colors.accent, fontWeight: '700', textTransform: 'capitalize' },

@@ -4,6 +4,8 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item } from '../../lib/api';
+import { effectiveSection } from '../../lib/sections';
+import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
 
 type Taste = 'all' | 'sweet' | 'salty' | 'spicy' | 'savory' | 'sour' | 'umami';
@@ -31,16 +33,16 @@ export default function FoodScreen() {
   const [activeTaste, setActiveTaste] = useState<Taste>('all');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'food'],
-    queryFn: () => listItems({ section: 'food', limit: 200 }),
+    queryKey: ['items', 'all'],
+    queryFn: () => listItems({ limit: 100 }),
   });
 
-  const items = data?.items ?? [];
+  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'food'));
   const filtered = activeTaste === 'all'
     ? items
     : items.filter(item => item.section_data?.taste_profile?.[activeTaste as keyof typeof item.section_data.taste_profile]);
 
-  function renderCard({ item }: { item: Item }) {
+  function renderCard({ item }: { item: DedupedItem }) {
     const d = item.section_data;
     const tastes = d?.taste_profile ? Object.entries(d.taste_profile).filter(([, v]) => v).map(([k]) => k) : [];
     const mood = d?.mood_tags?.[0];
@@ -48,6 +50,9 @@ export default function FoodScreen() {
 
     return (
       <Pressable style={styles.card} onPress={() => router.push(`/items/${item.id}`)}>
+        {item.dupCount > 1 && (
+          <View style={styles.dupBadge}><Text style={styles.dupBadgeText}>saved ×{item.dupCount}</Text></View>
+        )}
         {/* Cuisine badge */}
         <View style={styles.cardTop}>
           {d?.cuisine && <View style={styles.cuisineBadge}><Text style={styles.cuisineText}>{d.cuisine}</Text></View>}
@@ -162,7 +167,9 @@ const styles = StyleSheet.create({
   tasteEmoji: { fontSize: 14 },
   tasteLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
   listContent: { padding: spacing.lg, gap: 16 },
-  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 10 },
+  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 10, position: 'relative' },
+  dupBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, zIndex: 2 },
+  dupBadgeText: { fontSize: 10, fontWeight: '700', color: colors.accent, letterSpacing: 0.3 },
   cardTop: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   cuisineBadge: { backgroundColor: '#C05621' + '18', paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.full },
   cuisineText: { fontSize: 11, fontWeight: '700', color: '#C05621', textTransform: 'uppercase', letterSpacing: 0.5 },

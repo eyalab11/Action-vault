@@ -1,0 +1,31 @@
+# EAS upload exclusions — keep the tarball small.
+# This file is read by eas-cli from the git repo root. Files listed here are
+# stripped from the EAS Build upload after git clone.
+
+# --- Unrelated workspaces sitting in this repo ---
+# `ruflo/` is a separate project with its own .git (667 MB).
+ruflo/
+# `apps/mobile-fresh/` is the old scrapped React Native project; ~380 MB of
+# committed Android build artifacts that aren't needed for the live app.
+apps/mobile-fresh/
+
+# --- Compiled artifacts that shouldn't ride along ---
+*.aab
+*.apk
+*.ipa
+**/build/
+**/.gradle/
+**/Pods/
+**/DerivedData/
+**/.expo/
+**/dist/
+
+# --- Local config + caches ---
+**/.DS_Store
+**/.idea/
+**/.vscode/
+**/node_modules/
+**/.turbo/
+**/coverage/
+**/.next/
+**/.cache/

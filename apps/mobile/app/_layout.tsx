@@ -26,15 +26,12 @@ function warmupBackend() {
   fetch(`${API_URL}/health`, { method: 'GET' }).catch(() => {});
 }
 
-/** Prefetch all section data so every tab is instant on first open. */
+/** Prefetch the unified item list — section screens filter client-side via effectiveSection. */
 async function prefetchAllSections() {
-  await Promise.allSettled([
-    queryClient.prefetchQuery({ queryKey: ['items', 'all'],    queryFn: () => listItems({ limit: 50 }) }),
-    queryClient.prefetchQuery({ queryKey: ['items', 'travel'], queryFn: () => listItems({ section: 'travel', limit: 200 }) }),
-    queryClient.prefetchQuery({ queryKey: ['items', 'food'],   queryFn: () => listItems({ section: 'food',   limit: 200 }) }),
-    queryClient.prefetchQuery({ queryKey: ['items', 'ai'],     queryFn: () => listItems({ section: 'ai',     limit: 200 }) }),
-    queryClient.prefetchQuery({ queryKey: ['items', 'money'],  queryFn: () => listItems({ section: 'money',  limit: 200 }) }),
-  ]);
+  await queryClient.prefetchQuery({
+    queryKey: ['items', 'all'],
+    queryFn: () => listItems({ limit: 100 }),
+  });
 }
 
 export default function RootLayout() {

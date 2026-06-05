@@ -4,6 +4,8 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item } from '../../lib/api';
+import { effectiveSection } from '../../lib/sections';
+import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
 
 const AI_TOOLS: { key: string; label: string; color: string; bg: string; icon: string }[] = [
@@ -29,11 +31,11 @@ export default function AIToolsScreen() {
   const [activeTool, setActiveTool] = useState('All');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'ai'],
-    queryFn: () => listItems({ section: 'ai', limit: 200 }),
+    queryKey: ['items', 'all'],
+    queryFn: () => listItems({ limit: 100 }),
   });
 
-  const items = data?.items ?? [];
+  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'ai'));
   const filtered = activeTool === 'All' ? items : items.filter(i => i.section_data?.tool === activeTool);
 
   // Count per tool
@@ -42,7 +44,7 @@ export default function AIToolsScreen() {
     return acc;
   }, {} as Record<string, number>);
 
-  function renderCard({ item }: { item: Item }) {
+  function renderCard({ item }: { item: DedupedItem }) {
     const d = item.section_data;
     const tool = AI_TOOLS.find(t => t.key === d?.tool) ?? AI_TOOLS[AI_TOOLS.length - 1];
     const skill = d?.skill_level;
@@ -50,6 +52,9 @@ export default function AIToolsScreen() {
 
     return (
       <Pressable style={styles.card} onPress={() => router.push(`/items/${item.id}`)}>
+        {item.dupCount > 1 && (
+          <View style={styles.dupBadge}><Text style={styles.dupBadgeText}>saved ×{item.dupCount}</Text></View>
+        )}
         {/* Tool badge + skill level */}
         <View style={styles.cardHeader}>
           <View style={[styles.toolBadge, { backgroundColor: tool.bg }]}>
@@ -154,7 +159,9 @@ const styles = StyleSheet.create({
   toolCount: { minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
   toolCountText: { fontSize: 10, fontWeight: '700', color: colors.textSecondary },
   listContent: { padding: spacing.lg, gap: 14 },
-  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 10 },
+  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 10, position: 'relative' },
+  dupBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  dupBadgeText: { fontSize: 10, fontWeight: '700', color: colors.accent, letterSpacing: 0.3 },
   cardHeader: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   toolBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.full },
   toolText: { fontSize: 12, fontWeight: '700' },

@@ -43,6 +43,7 @@ itemsRouter.get('/', async (req, res) => {
       `id, source_url, source_platform, creator_name, title, summary,
        primary_category, tags, actionable, confidence_score,
        extraction_quality, status, created_at, analyzed_at,
+       section, section_data,
        action_tasks(id)`,
     )
     .eq('user_id', req.userId)
