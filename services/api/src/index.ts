@@ -38,6 +38,23 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
+// ─── Supabase keepalive ───────────────────────────────────────
+// Scheduled pings call this endpoint so the free Supabase project sees real DB
+// activity even when the mobile app is idle for long stretches.
+app.get('/keepalive', async (_req, res) => {
+  const { error } = await supabase
+    .from('items')
+    .select('id', { count: 'exact', head: true })
+    .limit(1);
+
+  if (error) {
+    console.error('[keepalive] Supabase ping failed', error);
+    return res.status(500).json({ ok: false, error: 'Supabase keepalive failed' });
+  }
+
+  return res.json({ ok: true, db: true, ts: new Date().toISOString() });
+});
+
 // ─── Routes ───────────────────────────────────────────────────
 app.use('/analyze', analyzeRouter);
 app.use('/items', itemsRouter);
