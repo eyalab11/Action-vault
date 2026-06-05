@@ -64,27 +64,62 @@ function buildMapHtml(items: Item[]): string {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, #map { width: 100%; height: 100%; }
+    body { background: linear-gradient(160deg, #E8D7B8 0%, #CADDC6 48%, #AFC7D5 100%); }
+    #map { filter: saturate(1.12) contrast(1.02) sepia(0.08); }
+    #map:after {
+      content: ""; pointer-events: none; position: fixed; inset: 0; z-index: 450;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(255, 248, 224, 0.28), transparent 32%),
+        radial-gradient(circle at 80% 12%, rgba(255, 89, 36, 0.12), transparent 26%),
+        linear-gradient(180deg, rgba(41, 31, 20, 0.10) 0%, transparent 24%, transparent 68%, rgba(41, 31, 20, 0.16) 100%);
+      mix-blend-mode: multiply;
+    }
+    .leaflet-container { background: #D9C5A3; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; }
+    .leaflet-control-zoom {
+      border: 0 !important; border-radius: 18px !important; overflow: hidden;
+      box-shadow: 0 10px 30px rgba(63, 47, 30, 0.20) !important;
+    }
+    .leaflet-control-zoom a {
+      width: 34px !important; height: 34px !important; line-height: 34px !important;
+      border: 0 !important; background: rgba(255,255,255,0.86) !important; color: #5B4632 !important;
+      backdrop-filter: blur(10px);
+    }
     #fallback { display:none; position:fixed; inset:0; padding:24px; font-family:-apple-system,Roboto,sans-serif; color:#1A1A1A; background:#FAFAF8; }
     #fallback h2 { font-size:17px; margin-bottom:8px; }
     #fallback p { font-size:14px; color:#666; line-height:1.5; }
+    .pin-wrap { position: relative; width: 42px; height: 48px; }
+    .pin-pulse {
+      position: absolute; left: 8px; bottom: 2px; width: 26px; height: 10px;
+      border-radius: 50%; background: rgba(35, 26, 18, 0.22); filter: blur(2px);
+    }
     .custom-pin {
-      width: 28px; height: 28px; border-radius: 50%;
-      border: 2.5px solid #fff;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+      position: absolute; left: 5px; top: 0;
+      width: 32px; height: 32px; border-radius: 18px 18px 18px 4px;
+      transform: rotate(-45deg);
+      border: 3px solid rgba(255,255,255,0.92);
+      box-shadow: 0 10px 22px rgba(48, 33, 18, 0.32), inset 0 -6px 10px rgba(0,0,0,0.12);
+    }
+    .custom-pin:after {
+      content: ""; position: absolute; inset: 7px; border-radius: 50%;
+      background: rgba(255,255,255,0.90);
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.15);
     }
     .leaflet-popup-content-wrapper {
-      border-radius: 12px; padding: 0; overflow: hidden;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+      border-radius: 20px; padding: 0; overflow: hidden;
+      box-shadow: 0 18px 50px rgba(50,34,20,0.25);
+      border: 1px solid rgba(255,255,255,0.55);
     }
-    .leaflet-popup-content { margin: 0; min-width: 200px; }
-    .popup-inner { padding: 14px 16px; }
-    .popup-title { font-size: 14px; font-weight: 700; color: #1A1A1A; margin-bottom: 4px; }
-    .popup-sub { font-size: 12px; color: #666; line-height: 1.4; margin-bottom: 10px; }
+    .leaflet-popup-content { margin: 0; min-width: 230px; }
+    .leaflet-popup-tip { background: #fffaf4; }
+    .popup-inner { padding: 16px 18px 14px; background: linear-gradient(180deg, #fffaf4 0%, #ffffff 100%); }
+    .popup-kicker { font-size: 10px; color: #FF5924; letter-spacing: 1px; font-weight: 800; text-transform: uppercase; margin-bottom: 5px; }
+    .popup-title { font-size: 16px; font-weight: 800; color: #1A1A1A; margin-bottom: 5px; line-height: 1.18; }
+    .popup-sub { font-size: 12px; color: #665C52; line-height: 1.45; margin-bottom: 2px; }
     .popup-btn {
       display: block; background: #FF5924; color: #fff;
-      text-align: center; padding: 8px 0; font-size: 13px;
+      text-align: center; padding: 10px 0; font-size: 13px;
       font-weight: 700; border: none; width: 100%; cursor: pointer;
-      border-radius: 0 0 12px 12px; margin-top: 4px;
+      border-radius: 0 0 20px 20px; margin-top: 0;
     }
   </style>
 </head>
@@ -138,12 +173,12 @@ function buildMapHtml(items: Item[]): string {
 
     var map = L.map('map', { zoomControl: true, attributionControl: false });
 
-    // Primary tile layer (Carto light) with OSM fallback if it fails.
-    var primary = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    // Primary tile layer (warm, illustrated travel-map feel) with reliable fallbacks.
+    var primary = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
       subdomains: 'abcd',
     });
-    var fallback = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+    var fallback = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 });
 
     var tilesLoaded = false;
     primary.on('load', function() { tilesLoaded = true; });
@@ -163,19 +198,20 @@ function buildMapHtml(items: Item[]): string {
     var bounds = [];
     pins.forEach(function(pin) {
       var el = document.createElement('div');
-      el.className = 'custom-pin';
-      el.style.backgroundColor = pin.color;
+      el.className = 'pin-wrap';
+      el.innerHTML = '<div class="pin-pulse"></div><div class="custom-pin" style="background:' + pin.color + '"></div>';
 
       var icon = L.divIcon({
         html: el.outerHTML,
-        iconSize: [28, 28],
-        iconAnchor: [14, 14],
+        iconSize: [42, 48],
+        iconAnchor: [21, 40],
         className: '',
       });
 
       var marker = L.marker([pin.lat, pin.lng], { icon: icon }).addTo(map);
       var popupHtml =
         '<div class="popup-inner">' +
+          '<div class="popup-kicker">' + pin.type + '</div>' +
           '<div class="popup-title">' + pin.name + '</div>' +
           '<div class="popup-sub">' + pin.title + (pin.summary ? '<br>' + pin.summary : '') + '</div>' +
         '</div>' +
@@ -251,13 +287,19 @@ export default function TravelScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      <View style={styles.atlasBackdrop} pointerEvents="none" />
+
+      {/* Floating Header */}
       <View style={styles.header}>
         <View>
+          <Text style={styles.eyebrow}>ATLAS</Text>
           <Text style={styles.title}>Travel Map</Text>
           <Text style={styles.subtitle}>
             {totalPins} {totalPins === 1 ? 'pin' : 'pins'} · {allCountries.length} {allCountries.length === 1 ? 'destination' : 'destinations'}
           </Text>
+        </View>
+        <View style={styles.compass}>
+          <Ionicons name="navigate" size={18} color={colors.accent} />
         </View>
       </View>
 
@@ -312,6 +354,7 @@ export default function TravelScreen() {
       {/* Bottom strip — saved trips */}
       {items.length > 0 && (
         <View style={styles.bottomStrip}>
+          <View style={styles.bottomHandle} />
           <Text style={styles.stripLabel}>SAVED TRIPS</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingHorizontal: spacing.lg }}>
             {items.map(item => {
@@ -377,16 +420,50 @@ export default function TravelScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
+  container: { flex: 1, backgroundColor: '#D9C5A3' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg },
 
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: spacing.lg, paddingTop: 56, paddingBottom: 12,
-    backgroundColor: colors.bg, borderBottomWidth: 1, borderBottomColor: colors.border,
+  atlasBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 180,
+    zIndex: 2,
+    backgroundColor: 'rgba(254,252,249,0.08)',
   },
-  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, letterSpacing: -0.5 },
-  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  header: {
+    position: 'absolute',
+    top: 48,
+    left: spacing.lg,
+    right: spacing.lg,
+    zIndex: 5,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255,250,244,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.75)',
+    borderRadius: radius.xl,
+    ...cardShadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+  },
+  eyebrow: { fontSize: 10, fontWeight: '800', color: colors.accent, letterSpacing: 1.4, marginBottom: 2 },
+  title: { fontSize: 24, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.7 },
+  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2, fontWeight: '600' },
+  compass: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.accentMuted,
+  },
 
   map: { flex: 1 },
 
@@ -405,9 +482,38 @@ const styles = StyleSheet.create({
   emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 
   // Bottom strip
-  bottomStrip: { backgroundColor: colors.surface, paddingVertical: 14, borderTopWidth: 1, borderTopColor: colors.border },
-  stripLabel: { fontSize: 11, fontWeight: '700', color: colors.textMuted, letterSpacing: 0.6, paddingHorizontal: spacing.lg, marginBottom: 8 },
-  tripChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.surfaceSecondary, paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, maxWidth: 200 },
+  bottomStrip: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255,250,244,0.96)',
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 18,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.85)',
+    ...cardShadow,
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+  },
+  bottomHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: '#D8CFC5', alignSelf: 'center', marginBottom: 10 },
+  stripLabel: { fontSize: 11, fontWeight: '800', color: colors.textMuted, letterSpacing: 1, paddingHorizontal: spacing.lg, marginBottom: 8 },
+  tripChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: radius.full,
+    maxWidth: 220,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...cardShadow,
+    shadowOpacity: 0.05,
+  },
   tripChipText: { fontSize: 13, fontWeight: '600', color: colors.textPrimary, flex: 1 },
   pinCount: { fontSize: 11, color: colors.accent, fontWeight: '700' },
 

@@ -41,6 +41,7 @@ export interface ItemAnalysisInput {
   creatorName: string | null;
   manualNote: string | null;
   transcript: string | null;
+  visualContext: string | null;
 }
 
 export interface ItemAnalysisOutput {
@@ -62,10 +63,13 @@ Return valid JSON only. No markdown. No prose outside the JSON.
 CATEGORIES: AI, Work, Money, Productivity, Learning, Travel, Food, Fitness, PersonalAdmin, Inspiration, Other
 
 SOURCE PRIORITY:
+- IMAGE/OCR CONTEXT = what appears in photos/carousels (PRIMARY for Instagram image posts)
 - TRANSCRIPT = what the person said (PRIMARY source)
-- CAPTION = what the poster wrote (use if informative; ignore if just hashtags/emojis/CTA)
+- CAPTION = what the poster wrote (use only if informative; ignore if just hashtags/emojis/CTA)
 
 RULES:
+- Never summarize hashtags as if they are the actual content.
+- If image/OCR context contains place names or visible text, base the title, summary, category, and tags on that context.
 - title: max 80 chars, factual, no clickbait, reflects actual content not what is being sold
 - summary: exactly 2-3 sentences. Focus on knowledge/advice/places/techniques — NOT what the creator is selling
 - primary_category: one from the list, most dominant theme
@@ -105,6 +109,12 @@ export function buildAnalyzeUserPrompt(input: ItemAnalysisInput): string {
       ? input.transcript.slice(0, 2000) + '… [truncated]'
       : input.transcript;
     lines.push(`\nTranscript (PRIMARY SOURCE):\n${truncated}`);
+  }
+  if (input.visualContext) {
+    const truncated = input.visualContext.length > 2500
+      ? input.visualContext.slice(0, 2500) + '… [truncated]'
+      : input.visualContext;
+    lines.push(`\nImage/OCR context (PRIMARY SOURCE FOR IMAGE POSTS):\n${truncated}`);
   }
   if (input.manualNote) lines.push(`User note: ${input.manualNote}`);
   return lines.join('\n') + '\n\nClassify and summarize.';
@@ -194,6 +204,10 @@ For each place mentioned:
 - Give a brief description of why this place is interesting based on the content
 - Classify the type
 
+SOURCE PRIORITY:
+- Image/OCR context and visible text are primary for Instagram carousel/photo posts.
+- Captions and hashtags are weak supporting metadata only.
+
 If the content is vague about location, only include places you're confident about.
 If no specific places are mentioned, return an empty locations array.
 
@@ -212,7 +226,7 @@ Return valid JSON only:
   "best_season": "string or null (e.g. 'Spring (March-May)')"
 }`;
 
-export function buildExtractTravelUserPrompt(title: string, summary: string, tags: string[], transcript: string | null): string {
+export function buildExtractTravelUserPrompt(title: string, summary: string, tags: string[], transcript: string | null, visualContext: string | null): string {
   const lines = [
     `Content title: ${title}`,
     `Summary: ${summary}`,
@@ -221,6 +235,10 @@ export function buildExtractTravelUserPrompt(title: string, summary: string, tag
   if (transcript) {
     const t = transcript.length > 1500 ? transcript.slice(0, 1500) + '…' : transcript;
     lines.push(`\nTranscript:\n${t}`);
+  }
+  if (visualContext) {
+    const v = visualContext.length > 2000 ? visualContext.slice(0, 2000) + '…' : visualContext;
+    lines.push(`\nImage/OCR context:\n${v}`);
   }
   lines.push('\nExtract all specific locations mentioned. Provide accurate GPS coordinates.');
   return lines.join('\n');

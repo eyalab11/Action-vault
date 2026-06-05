@@ -44,6 +44,7 @@ analyzeRouter.post('/', requireAuth, async (req, res) => {
     creatorName: metadata.creatorName,
     manualNote: manual_note ?? null,
     transcript: metadata.transcript,
+    visualContext: metadata.visualContext,
   });
 
   // 3. Detect section — user's explicit choice wins, otherwise AI detection
@@ -56,7 +57,7 @@ analyzeRouter.post('/', requireAuth, async (req, res) => {
     analysis.actionable
       ? extractActions({ title: analysis.title, summary: analysis.summary, category: analysis.primary_category, tags: analysis.tags, manualNote: manual_note ?? null })
       : Promise.resolve({ action_steps: [], action_confidence: 0, action_notes: '' }),
-    extractSectionData(section, analysis, metadata.transcript),
+    extractSectionData(section, analysis, metadata.transcript, metadata.visualContext),
   ]);
 
   console.log(`[analyze] actions=${actionsResult.action_steps.length} section_data_keys=${Object.keys(sectionResult.section_data).length}`);

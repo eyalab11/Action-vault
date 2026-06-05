@@ -10,6 +10,8 @@
  * account names — no API token required. Falls back to OG scraping.
  */
 
+import OpenAI from 'openai';
+
 export type SourcePlatform =
   | 'instagram'
   | 'tiktok'
@@ -26,7 +28,11 @@ export interface FetchedMetadata {
   creatorName: string | null;
   /** Transcript of the video audio (via Whisper), if available. */
   transcript: string | null;
+  /** OCR + visual notes from image/carousel posts, if available. */
+  visualContext: string | null;
 }
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ─── Platform detection ───────────────────────────────────────
 
@@ -135,8 +141,9 @@ async function fetchInstagramEmbed(
   description: string | null;
   creatorName: string | null;
   videoUrl: string | null;
+  imageUrls: string[];
 }> {
-  const empty = { title: null, description: null, creatorName: null, videoUrl: null };
+  const empty = { title: null, description: null, creatorName: null, videoUrl: null, imageUrls: [] };
   try {
     // Extract shortcode from URL: /p/ABC123/ or /reel/ABC123/
     const shortcode = url.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)/)?.[2];
@@ -215,14 +222,136 @@ async function fetchInstagramEmbed(
       ? unescapeCtx(videoUrlRaw)
       : null;
 
+    const imageUrls = extractInstagramImageUrls(html, unescapeCtx);
+
     console.log(
-      `[metadata] Instagram embed: creator="${creatorName}" caption="${description?.slice(0, 80) ?? '[none]'}" video=${videoUrl ? 'YES' : 'NO'}`,
+      `[metadata] Instagram embed: creator="${creatorName}" caption="${description?.slice(0, 80) ?? '[none]'}" video=${videoUrl ? 'YES' : 'NO'} images=${imageUrls.length}`,
     );
 
-    return { title, description, creatorName, videoUrl };
+    return { title, description, creatorName, videoUrl, imageUrls };
   } catch (err) {
     console.error('[metadata] Instagram embed fetch failed', err);
     return empty;
+  }
+}
+
+function extractInstagramImageUrls(
+  html: string,
+  unescapeCtx: (s: string) => string,
+): string[] {
+  const urls = new Set<string>();
+  const patterns = [
+    /display_url[\\]*":[\\]*"((?:[^"\\]|\\[^"])*)\\"/g,
+    /thumbnail_src[\\]*":[\\]*"((?:[^"\\]|\\[^"])*)\\"/g,
+    /"image"\s*:\s*"([^"]+)"/g,
+    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/gi,
+    /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/gi,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of html.matchAll(pattern)) {
+      const raw = match[1];
+      if (!raw) continue;
+      const url = decodeHtmlEntities(unescapeCtx(raw)).trim();
+      if (/^https?:\/\//.test(url) && /\.(jpe?g|png|webp)(\?|$)/i.test(url)) {
+        urls.add(url);
+      }
+    }
+  }
+
+  return [...urls].slice(0, 6);
+}
+
+async function fetchImageAsDataUrl(imageUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': BROWSER_UA,
+        Referer: 'https://www.instagram.com/',
+        Origin: 'https://www.instagram.com',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(12000),
+    });
+
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+    if (!contentType.startsWith('image/')) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > 8 * 1024 * 1024) return null;
+
+    return `data:${contentType};base64,${buffer.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeInstagramImages(
+  imageUrls: string[],
+  caption: string | null,
+): Promise<string | null> {
+  if (imageUrls.length === 0 || !process.env.OPENAI_API_KEY) return null;
+
+  const dataUrls: string[] = [];
+  for (const imageUrl of imageUrls.slice(0, 4)) {
+    const dataUrl = await fetchImageAsDataUrl(imageUrl);
+    if (dataUrl) dataUrls.push(dataUrl);
+  }
+  if (dataUrls.length === 0) return null;
+
+  try {
+    const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+      {
+        type: 'text',
+        text:
+          'Analyze these Instagram carousel/photo images for ActionVault. ' +
+          'Extract visible text/OCR, specific place names, and what the images actually show. ' +
+          'Do not infer from hashtags or unrelated captions. Return JSON only with keys: ' +
+          'visual_summary (string), visible_text (array of strings), locations (array of strings), confidence (high|medium|low).' +
+          `\nCaption, if any:\n${caption ?? '[none]'}`,
+      },
+      ...dataUrls.map((url) => ({
+        type: 'image_url' as const,
+        image_url: { url, detail: 'high' as const },
+      })),
+    ];
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+      messages: [{ role: 'user', content }],
+    });
+
+    const raw = completion.choices[0]?.message?.content ?? '{}';
+    const parsed = JSON.parse(raw) as {
+      visual_summary?: unknown;
+      visible_text?: unknown;
+      locations?: unknown;
+      confidence?: unknown;
+    };
+
+    const summary = typeof parsed.visual_summary === 'string' ? parsed.visual_summary.trim() : '';
+    const visibleText = Array.isArray(parsed.visible_text)
+      ? parsed.visible_text.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      : [];
+    const locations = Array.isArray(parsed.locations)
+      ? parsed.locations.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+      : [];
+    const confidence = typeof parsed.confidence === 'string' ? parsed.confidence : 'medium';
+
+    const parts = [
+      summary ? `Visual summary: ${summary}` : null,
+      visibleText.length ? `Visible text/OCR: ${visibleText.join(' | ')}` : null,
+      locations.length ? `Locations mentioned visually: ${locations.join(', ')}` : null,
+      `Visual confidence: ${confidence}`,
+    ].filter(Boolean);
+
+    return parts.length ? parts.join('\n') : null;
+  } catch (err) {
+    console.error('[metadata] Instagram image analysis failed', err);
+    return null;
   }
 }
 
@@ -351,6 +480,7 @@ export async function fetchMetadata(rawUrl: string): Promise<FetchedMetadata> {
   let ogDescription: string | null = null;
   let creatorName: string | null = null;
   let transcript: string | null = null;
+  let visualContext: string | null = null;
 
   if (platform === 'youtube') {
     const oembed = await fetchYouTubeOEmbed(canonicalUrl);
@@ -387,6 +517,7 @@ export async function fetchMetadata(rawUrl: string): Promise<FetchedMetadata> {
       ?? null;
 
     let videoUrl = embed.videoUrl ?? og.videoUrl;
+    visualContext = await analyzeInstagramImages(embed.imageUrls, ogDescription);
 
     // Fallback: try Instagram's GraphQL endpoint if we still don't have a video URL.
     const shortcode = canonicalUrl.match(/\/(p|reel|reels)\/([A-Za-z0-9_-]+)/)?.[2];
@@ -401,7 +532,7 @@ export async function fetchMetadata(rawUrl: string): Promise<FetchedMetadata> {
     }
 
     console.log(
-      `[metadata] instagram: creator="${creatorName}" caption="${ogDescription?.slice(0, 80) ?? '[none]'}" video=${videoUrl ? 'YES' : 'NO'} transcript=${transcript ? `${transcript.length} chars` : 'NO'}`,
+      `[metadata] instagram: creator="${creatorName}" caption="${ogDescription?.slice(0, 80) ?? '[none]'}" video=${videoUrl ? 'YES' : 'NO'} transcript=${transcript ? `${transcript.length} chars` : 'NO'} visual=${visualContext ? 'YES' : 'NO'}`,
     );
   } else if (platform === 'twitter') {
     const og = await fetchOpenGraph(canonicalUrl, true);
@@ -414,5 +545,5 @@ export async function fetchMetadata(rawUrl: string): Promise<FetchedMetadata> {
     ogDescription = og.description;
   }
 
-  return { platform, canonicalUrl, ogTitle, ogDescription, creatorName, transcript };
+  return { platform, canonicalUrl, ogTitle, ogDescription, creatorName, transcript, visualContext };
 }

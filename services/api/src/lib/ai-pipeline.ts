@@ -116,9 +116,10 @@ export async function extractSectionData(
   section: Section,
   analysis: ItemAnalysisOutput,
   transcript: string | null,
+  visualContext: string | null,
 ): Promise<{ section: Section; section_data: object }> {
   if (section === 'travel') {
-    return { section, section_data: await extractTravel(analysis, transcript) };
+    return { section, section_data: await extractTravel(analysis, transcript, visualContext) };
   }
   if (section === 'food') {
     return { section, section_data: await extractFood(analysis) };
@@ -132,14 +133,14 @@ export async function extractSectionData(
   return { section: 'general', section_data: {} };
 }
 
-async function extractTravel(analysis: ItemAnalysisOutput, transcript: string | null): Promise<TravelExtractionOutput> {
+async function extractTravel(analysis: ItemAnalysisOutput, transcript: string | null, visualContext: string | null): Promise<TravelExtractionOutput> {
   const completion = await openai.chat.completions.create({
     model: MODEL,
     response_format: { type: 'json_object' },
     temperature: 0.1,
     messages: [
       { role: 'system', content: EXTRACT_TRAVEL_SYSTEM_PROMPT },
-      { role: 'user', content: buildExtractTravelUserPrompt(analysis.title, analysis.summary, analysis.tags, transcript) },
+      { role: 'user', content: buildExtractTravelUserPrompt(analysis.title, analysis.summary, analysis.tags, transcript, visualContext) },
     ],
   });
   const raw = completion.choices[0]?.message?.content ?? '{}';
