@@ -11,6 +11,7 @@ import { requireAuth } from '../lib/auth';
 import { fetchMetadata } from '../lib/metadata';
 import { analyzeItem, extractActions, extractSectionData, detectSection } from '../lib/ai-pipeline';
 import { supabase } from '../lib/supabase';
+import { normalizeUrl } from '../lib/normalize-url';
 
 export const analyzeRouter = Router();
 
@@ -23,6 +24,14 @@ const bodySchema = z.object({
   section: z.enum(VALID_SECTIONS).optional(),
 });
 
+type AnalyzeResponse = { item: any };
+
+/**
+ * In-flight guard: collapse concurrent /analyze requests for the same user+URL
+ * into a single expensive analysis.
+ */
+const inflightByUserAndUrl = new Map<string, Promise<AnalyzeResponse>>();
+
 analyzeRouter.post('/', requireAuth, async (req, res) => {
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten().fieldErrors });
@@ -30,6 +39,92 @@ analyzeRouter.post('/', requireAuth, async (req, res) => {
   const { url, manual_note, section: userSection } = parsed.data;
   const userId = req.userId;
   console.log(`[analyze] user=${userId} url=${url} userSection=${userSection ?? 'auto'}`);
+
+  // Normalize early so we can dedupe without calling the AI pipeline.
+  const normalized = normalizeUrl(url);
+
+  // 0. Fast path — if we already saved this URL for this user, return the existing item.
+  const existing = await findExistingItemByNormalizedUrl(userId, normalized);
+  if (existing) {
+    console.log(`[analyze] dedup hit -> item=${existing.id}`);
+    return res.status(200).json({ item: existing });
+  }
+
+  const inflightKey = `${userId}|${normalized}`;
+  const existingInflight = inflightByUserAndUrl.get(inflightKey);
+  if (existingInflight) {
+    console.log('[analyze] inflight hit -> awaiting existing analysis');
+    try {
+      const out = await existingInflight;
+      return res.status(200).json(out);
+    } catch (e: any) {
+      // If the in-flight analysis failed, fall through and retry once.
+      console.warn('[analyze] inflight failed, retrying once', e?.message ?? e);
+      inflightByUserAndUrl.delete(inflightKey);
+    }
+  }
+
+  const analysisPromise = performAnalyzeAndSave({ url, manual_note: manual_note ?? null, userSection, userId })
+    .finally(() => inflightByUserAndUrl.delete(inflightKey));
+  inflightByUserAndUrl.set(inflightKey, analysisPromise);
+
+  try {
+    const out = await analysisPromise;
+    return res.status(201).json(out);
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message ?? 'Failed to analyze' });
+  }
+});
+
+async function findExistingItemByNormalizedUrl(userId: string, normalized: string): Promise<any | null> {
+  if (!normalized) return null;
+
+  // We only need to search recent items: duplicates are usually back-to-back shares.
+  const { data, error } = await supabase
+    .from('items')
+    .select('id, source_url, canonical_url, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  if (error || !data) return null;
+
+  const match = data.find((it: any) => {
+    const key = normalizeUrl(it.canonical_url ?? it.source_url);
+    return key === normalized;
+  });
+
+  if (!match?.id) return null;
+
+  const { data: full, error: fullErr } = await supabase
+    .from('items')
+    .select('*, action_tasks(*)')
+    .eq('id', match.id)
+    .eq('user_id', userId)
+    .single();
+
+  if (fullErr || !full) return null;
+
+  // Sort tasks by sort_order to match the normal /items/:id behavior.
+  if (Array.isArray(full.action_tasks)) {
+    full.action_tasks.sort(
+      (a: { sort_order: number }, b: { sort_order: number }) => a.sort_order - b.sort_order,
+    );
+  }
+
+  return {
+    ...full,
+    action_count: Array.isArray(full.action_tasks) ? full.action_tasks.length : 0,
+  };
+}
+
+async function performAnalyzeAndSave(args: {
+  url: string;
+  manual_note: string | null;
+  userSection?: (typeof VALID_SECTIONS)[number];
+  userId: string;
+}): Promise<AnalyzeResponse> {
+  const { url, manual_note, userSection, userId } = args;
 
   // 1. Fetch metadata
   const metadata = await fetchMetadata(url);
@@ -55,7 +150,15 @@ analyzeRouter.post('/', requireAuth, async (req, res) => {
   // 4. Stage 2 + Stage 3 — run in parallel
   const [actionsResult, sectionResult] = await Promise.all([
     analysis.actionable
-      ? extractActions({ title: analysis.title, summary: analysis.summary, category: analysis.primary_category, tags: analysis.tags, manualNote: manual_note ?? null })
+      ? extractActions({
+          title: analysis.title,
+          summary: analysis.summary,
+          category: analysis.primary_category,
+          tags: analysis.tags,
+          manualNote: manual_note ?? null,
+          transcript: metadata.transcript,
+          visualContext: metadata.visualContext,
+        })
       : Promise.resolve({ action_steps: [], action_confidence: 0, action_notes: '' }),
     extractSectionData(section, analysis, metadata.transcript, metadata.visualContext),
   ]);
@@ -105,17 +208,20 @@ analyzeRouter.post('/', requireAuth, async (req, res) => {
     if (itemError?.message?.includes('section')) {
       const { section: _s, section_data: _sd, ...payloadWithoutSection } = insertPayload as any;
       const { data: item2, error: err2 } = await supabase.from('items').insert(payloadWithoutSection).select('*').single();
-      if (err2 || !item2) { console.error('[analyze] DB insert failed', err2); return res.status(500).json({ error: 'Failed to save item' }); }
-      return finishAndRespond(res, item2, actionsResult.action_steps, userId, section, sectionResult.section_data);
+      if (err2 || !item2) {
+        console.error('[analyze] DB insert failed', err2);
+        throw new Error('Failed to save item');
+      }
+      return buildAnalyzeResponse(item2, actionsResult.action_steps, userId, section, sectionResult.section_data);
     }
     console.error('[analyze] DB insert failed', itemError);
-    return res.status(500).json({ error: 'Failed to save item' });
+    throw new Error('Failed to save item');
   }
 
-  return finishAndRespond(res, item, actionsResult.action_steps, userId, section, sectionResult.section_data);
-});
+  return buildAnalyzeResponse(item, actionsResult.action_steps, userId, section, sectionResult.section_data);
+}
 
-async function finishAndRespond(res: any, item: any, actionSteps: any[], userId: string, section: string, sectionData: object) {
+async function buildAnalyzeResponse(item: any, actionSteps: any[], userId: string, section: string, sectionData: object): Promise<AnalyzeResponse> {
   let savedTasks: object[] = [];
   if (actionSteps.length > 0) {
     const { data: tasks, error } = await supabase.from('action_tasks').insert(
@@ -125,7 +231,7 @@ async function finishAndRespond(res: any, item: any, actionSteps: any[], userId:
     else savedTasks = tasks ?? [];
   }
 
-  return res.status(201).json({
+  return {
     item: {
       ...item,
       section: item.section ?? section,
@@ -133,5 +239,5 @@ async function finishAndRespond(res: any, item: any, actionSteps: any[], userId:
       action_tasks: savedTasks,
       action_count: savedTasks.length,
     },
-  });
+  };
 }

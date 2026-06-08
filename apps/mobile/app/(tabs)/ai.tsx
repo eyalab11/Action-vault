@@ -4,9 +4,9 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item } from '../../lib/api';
-import { effectiveSection } from '../../lib/sections';
 import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const AI_TOOLS: { key: string; label: string; color: string; bg: string; icon: string }[] = [
   { key: 'All',             label: 'All',              color: colors.accent,  bg: colors.accentSoft, icon: 'sparkles-outline' },
@@ -29,13 +29,14 @@ const SKILL_BADGE: Record<string, { color: string; bg: string }> = {
 export default function AIToolsScreen() {
   const router = useRouter();
   const [activeTool, setActiveTool] = useState('All');
+  const insets = useSafeAreaInsets();
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'all'],
-    queryFn: () => listItems({ limit: 100 }),
+    queryKey: ['items', 'section', 'ai'],
+    queryFn: () => listItems({ section: 'ai', limit: 80, view: 'card' }),
   });
 
-  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'ai'));
+  const items = dedupItems(data?.items ?? []);
   const filtered = activeTool === 'All' ? items : items.filter(i => i.section_data?.tool === activeTool);
 
   // Count per tool
@@ -103,7 +104,7 @@ export default function AIToolsScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.title}>AI Tools</Text>
         <Text style={styles.subtitle}>{items.length} saved tips & techniques</Text>
       </View>
@@ -138,7 +139,7 @@ export default function AIToolsScreen() {
           data={filtered}
           keyExtractor={i => i.id}
           renderItem={renderCard}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: spacing.lg + insets.bottom + 72 }]}
           showsVerticalScrollIndicator={false}
         />
       )}

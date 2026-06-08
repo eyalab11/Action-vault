@@ -70,6 +70,9 @@ SOURCE PRIORITY:
 RULES:
 - Never summarize hashtags as if they are the actual content.
 - If image/OCR context contains place names or visible text, base the title, summary, category, and tags on that context.
+- Preserve exact named entities from the source: repo names, app names, websites, URLs, handles, tools, restaurants, cities, and landmarks.
+- If the content recommends a concrete repo/tool/place and the name is available, the title or summary MUST include that exact name. Do not replace it with generic wording like "a repository" or "a tool".
+- For carousels/lists, summarize the full list coverage, not just the first few items.
 - title: max 80 chars, factual, no clickbait, reflects actual content not what is being sold
 - summary: exactly 2-3 sentences. Focus on knowledge/advice/places/techniques — NOT what the creator is selling
 - primary_category: one from the list, most dominant theme
@@ -105,14 +108,14 @@ export function buildAnalyzeUserPrompt(input: ItemAnalysisInput): string {
   }
   if (input.creatorName) lines.push(`Creator: ${input.creatorName}`);
   if (input.transcript) {
-    const truncated = input.transcript.length > 2000
-      ? input.transcript.slice(0, 2000) + '… [truncated]'
+    const truncated = input.transcript.length > 4000
+      ? input.transcript.slice(0, 4000) + '… [truncated]'
       : input.transcript;
     lines.push(`\nTranscript (PRIMARY SOURCE):\n${truncated}`);
   }
   if (input.visualContext) {
-    const truncated = input.visualContext.length > 2500
-      ? input.visualContext.slice(0, 2500) + '… [truncated]'
+    const truncated = input.visualContext.length > 6000
+      ? input.visualContext.slice(0, 6000) + '… [truncated]'
       : input.visualContext;
     lines.push(`\nImage/OCR context (PRIMARY SOURCE FOR IMAGE POSTS):\n${truncated}`);
   }
@@ -128,6 +131,8 @@ export interface ActionExtractionInput {
   category: string;
   tags: string[];
   manualNote: string | null;
+  transcript: string | null;
+  visualContext: string | null;
 }
 
 export interface ActionStep {
@@ -154,6 +159,8 @@ FOR ALL OTHER CONTENT:
 - Each step MUST have a description (2-3 sentences): HOW to do it, a specific insight from the content, and what result to expect
 - Start with an imperative verb
 - Never: "learn more", "do research", vague advice, buying/enrolling CTAs
+- If a repo/tool/site/place/URL is visible or spoken, include the exact name in the relevant action step.
+- If the source is mostly a recommendation list, create steps/cards that preserve the named recommendations instead of generic advice.
 - Good example: "Create a Gumroad account and upload your first product"
 - Good description: "Spend 20 min on LinkedIn searching '[niche] + freelancer' — note their exact pricing language to write your own offer page. This positions you as premium from day one."
 
@@ -173,6 +180,14 @@ export function buildExtractActionsUserPrompt(input: ActionExtractionInput): str
     `Tags: ${input.tags.join(', ')}`,
   ];
   if (input.manualNote) lines.push(`User note: ${input.manualNote}`);
+  if (input.transcript) {
+    const t = input.transcript.length > 2500 ? input.transcript.slice(0, 2500) + '…' : input.transcript;
+    lines.push(`\nTranscript / spoken details:\n${t}`);
+  }
+  if (input.visualContext) {
+    const v = input.visualContext.length > 4000 ? input.visualContext.slice(0, 4000) + '…' : input.visualContext;
+    lines.push(`\nImage/OCR context with exact names:\n${v}`);
+  }
   if (input.category === 'Food') {
     lines.push('\nThis is a recipe. List every ingredient as its own step, then the cooking instructions.');
   } else {
@@ -207,6 +222,7 @@ For each place mentioned:
 SOURCE PRIORITY:
 - Image/OCR context and visible text are primary for Instagram carousel/photo posts.
 - Captions and hashtags are weak supporting metadata only.
+- For carousels, inspect every numbered image detail. Do not stop after the first 3 locations if more are listed.
 
 If the content is vague about location, only include places you're confident about.
 If no specific places are mentioned, return an empty locations array.
@@ -233,14 +249,14 @@ export function buildExtractTravelUserPrompt(title: string, summary: string, tag
     `Tags: ${tags.join(', ')}`,
   ];
   if (transcript) {
-    const t = transcript.length > 1500 ? transcript.slice(0, 1500) + '…' : transcript;
+    const t = transcript.length > 3000 ? transcript.slice(0, 3000) + '…' : transcript;
     lines.push(`\nTranscript:\n${t}`);
   }
   if (visualContext) {
-    const v = visualContext.length > 2000 ? visualContext.slice(0, 2000) + '…' : visualContext;
+    const v = visualContext.length > 6000 ? visualContext.slice(0, 6000) + '…' : visualContext;
     lines.push(`\nImage/OCR context:\n${v}`);
   }
-  lines.push('\nExtract all specific locations mentioned. Provide accurate GPS coordinates.');
+  lines.push('\nExtract ALL specific locations mentioned across the whole carousel/list. Provide accurate GPS coordinates.');
   return lines.join('\n');
 }
 
@@ -323,9 +339,10 @@ Return valid JSON only:
   "task_type": ["string"]
 }`;
 
-export function buildExtractAIUserPrompt(title: string, summary: string, tags: string[], transcript: string | null): string {
+export function buildExtractAIUserPrompt(title: string, summary: string, tags: string[], transcript: string | null, visualContext: string | null): string {
   const lines = [`Title: ${title}`, `Summary: ${summary}`, `Tags: ${tags.join(', ')}`];
-  if (transcript) lines.push(`\nTranscript excerpt:\n${transcript.slice(0, 1000)}`);
+  if (transcript) lines.push(`\nTranscript excerpt:\n${transcript.slice(0, 2500)}`);
+  if (visualContext) lines.push(`\nImage/OCR context:\n${visualContext.slice(0, 4000)}`);
   lines.push('\nExtract AI tool metadata.');
   return lines.join('\n');
 }
@@ -375,9 +392,10 @@ Return valid JSON only:
   "confidence_note": "string"
 }`;
 
-export function buildExtractMoneyUserPrompt(title: string, summary: string, tags: string[], transcript: string | null): string {
+export function buildExtractMoneyUserPrompt(title: string, summary: string, tags: string[], transcript: string | null, visualContext: string | null): string {
   const lines = [`Title: ${title}`, `Summary: ${summary}`, `Tags: ${tags.join(', ')}`];
-  if (transcript) lines.push(`\nTranscript excerpt:\n${transcript.slice(0, 1000)}`);
-  lines.push('\nExtract financial metadata and ticker symbols.');
+  if (transcript) lines.push(`\nTranscript excerpt:\n${transcript.slice(0, 2500)}`);
+  if (visualContext) lines.push(`\nImage/OCR context:\n${visualContext.slice(0, 4000)}`);
+  lines.push('\nExtract financial metadata, ticker symbols, and exact named tools/repos/sites when present.');
   return lines.join('\n');
 }

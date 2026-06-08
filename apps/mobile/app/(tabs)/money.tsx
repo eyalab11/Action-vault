@@ -4,9 +4,9 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item, type MoneyTicker } from '../../lib/api';
-import { effectiveSection } from '../../lib/sections';
 import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type AssetFilter = 'all' | 'stock' | 'crypto' | 'etf' | 'real estate' | 'other';
 
@@ -40,13 +40,14 @@ const HORIZON_CONFIG = {
 export default function MoneyScreen() {
   const router = useRouter();
   const [activeFilter, setActiveFilter] = useState<AssetFilter>('all');
+  const insets = useSafeAreaInsets();
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'all'],
-    queryFn: () => listItems({ limit: 100 }),
+    queryKey: ['items', 'section', 'money'],
+    queryFn: () => listItems({ section: 'money', limit: 80, view: 'card' }),
   });
 
-  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'money'));
+  const items = dedupItems(data?.items ?? []);
   const filtered = activeFilter === 'all'
     ? items
     : items.filter(i => {
@@ -132,7 +133,7 @@ export default function MoneyScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.title}>Money & Investing</Text>
         <Text style={styles.subtitle}>{items.length} saved tips & analyses</Text>
       </View>
@@ -162,7 +163,7 @@ export default function MoneyScreen() {
           data={filtered}
           keyExtractor={i => i.id}
           renderItem={renderCard}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: spacing.lg + insets.bottom + 72 }]}
           showsVerticalScrollIndicator={false}
         />
       )}

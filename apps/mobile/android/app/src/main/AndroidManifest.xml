@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
@@ -27,11 +28,23 @@
         <data android:scheme="actionvault"/>
         <data android:scheme="exp+actionvault"/>
       </intent-filter>
-      <intent-filter data-generated="true">
+    </activity>
+
+    <activity
+      android:name=".ShareReceiverActivity"
+      android:exported="true"
+      android:excludeFromRecents="true"
+      android:noHistory="true"
+      android:theme="@android:style/Theme.Translucent.NoTitleBar">
+      <intent-filter>
         <action android:name="android.intent.action.SEND"/>
         <data android:mimeType="text/plain"/>
         <category android:name="android.intent.category.DEFAULT"/>
       </intent-filter>
     </activity>
+
+    <service
+      android:name=".ShareAnalyzeService"
+      android:exported="false" />
   </application>
 </manifest>

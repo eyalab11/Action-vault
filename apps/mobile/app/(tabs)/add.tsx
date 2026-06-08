@@ -49,6 +49,7 @@ export default function AddLinkScreen() {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
   const autoAnalyzedRef = useRef<string | null>(null);
+  const inflightKeyRef = useRef<string | null>(null);
 
   // When a shared URL arrives: prefill, detect section, and auto-analyze.
   useEffect(() => {
@@ -89,14 +90,14 @@ export default function AddLinkScreen() {
    * the existing item if found, null otherwise.
    */
   async function checkExisting(rawUrl: string): Promise<Item | null> {
-    const cached = queryClient.getQueryData<{ items: Item[] } | undefined>(['items', 'all']);
+    const cached = queryClient.getQueryData<{ items: Item[] } | undefined>(['items', 'all-slim']);
     const fromCache = cached?.items ? findExistingItem(cached.items, rawUrl) : null;
     if (fromCache) return fromCache;
     // Cache miss — pull fresh once.
     try {
       const fresh = await queryClient.fetchQuery({
-        queryKey: ['items', 'all'],
-        queryFn: () => listItems({ limit: 100 }),
+        queryKey: ['items', 'all-slim'],
+        queryFn: () => listItems({ limit: 100, view: 'slim' }),
       });
       return findExistingItem(fresh.items, rawUrl);
     } catch {
@@ -109,6 +110,13 @@ export default function AddLinkScreen() {
     for (const u of urls) {
       try { new URL(u); } catch { Alert.alert('Invalid URL', `Not a valid URL:\n${u}`); return; }
     }
+
+    // Guard against accidental double invocation (double navigation, double press, dev-mode effects).
+    const key = urls.length === 1
+      ? normalizeUrl(urls[0])
+      : `multi:${urls.map(normalizeUrl).join('|')}`;
+    if (inflightKeyRef.current === key) return;
+    inflightKeyRef.current = key;
 
     setLoading(true);
     const messages = LOADING_MESSAGES[sectionForLoad];
@@ -147,6 +155,7 @@ export default function AddLinkScreen() {
     } finally {
       clearTimeout(t1); clearTimeout(t2);
       setLoading(false); setLoadingMessage('');
+      inflightKeyRef.current = null;
     }
   }
 

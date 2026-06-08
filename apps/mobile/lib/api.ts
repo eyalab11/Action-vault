@@ -104,15 +104,20 @@ export async function analyzeUrls(urls: string[], manualNote?: string, onProgres
   return results;
 }
 
-export async function listItems(params?: { status?: string; category?: string; section?: string; limit?: number; offset?: number }) {
+export async function listItems(params?: { status?: string; category?: string; section?: string; view?: 'full' | 'card' | 'slim'; limit?: number; offset?: number }) {
   const qs = new URLSearchParams();
   if (params?.status) qs.set('status', params.status);
   if (params?.category) qs.set('category', params.category);
   if (params?.section) qs.set('section', params.section);
+  if (params?.view) qs.set('view', params.view);
   if (params?.limit) qs.set('limit', String(params.limit));
   if (params?.offset) qs.set('offset', String(params.offset));
   const query = qs.toString() ? `?${qs}` : '';
   return apiFetch<{ items: Item[]; total: number }>(`/items${query}`);
+}
+
+export async function getItemsSummary() {
+  return apiFetch<{ totals: { all: number; ai: number; money: number; travel: number; food: number }; latest: Item[] }>('/items/summary');
 }
 
 export async function getItem(id: string) {

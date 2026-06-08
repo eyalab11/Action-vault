@@ -25,6 +25,8 @@ const listQuerySchema = z.object({
   status: z.string().optional(),           // comma-separated statuses
   category: z.string().optional(),
   search: z.string().optional(),
+  section: z.enum(['general', 'travel', 'food', 'ai', 'money']).optional(),
+  view: z.enum(['full', 'card', 'slim']).optional(),
   limit: z.coerce.number().min(1).max(100).default(50),
   offset: z.coerce.number().min(0).default(0),
 });
@@ -35,17 +37,27 @@ itemsRouter.get('/', async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
-  const { status, category, limit, offset } = parsed.data;
+  const { status, category, section, view, limit, offset } = parsed.data;
 
-  let query = supabase
-    .from('items')
-    .select(
-      `id, source_url, source_platform, creator_name, title, summary,
+  const selectColumns = view === 'slim'
+    ? `id, source_url, source_platform, creator_name, title, summary,
        primary_category, tags, actionable, confidence_score,
        extraction_quality, status, created_at, analyzed_at,
-       section, section_data,
-       action_tasks(id)`,
-    )
+       section`
+    : view === 'card'
+      ? `id, source_url, source_platform, creator_name, title, summary,
+         primary_category, tags, actionable, confidence_score,
+         extraction_quality, status, created_at, analyzed_at,
+         section, section_data`
+      : `id, source_url, source_platform, creator_name, title, summary,
+         primary_category, tags, actionable, confidence_score,
+         extraction_quality, status, created_at, analyzed_at,
+         section, section_data,
+         action_tasks(id)`;
+
+  let query: any = supabase
+    .from('items')
+    .select(selectColumns as any, { count: 'exact' })
     .eq('user_id', req.userId)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
@@ -59,6 +71,15 @@ itemsRouter.get('/', async (req, res) => {
     query = query.eq('primary_category', category);
   }
 
+  if (section) {
+    // Include both explicit section and matching category for backward compatibility.
+    if (section === 'ai') query = query.or('section.eq.ai,primary_category.eq.AI');
+    else if (section === 'money') query = query.or('section.eq.money,primary_category.eq.Money');
+    else if (section === 'travel') query = query.or('section.eq.travel,primary_category.eq.Travel');
+    else if (section === 'food') query = query.or('section.eq.food,primary_category.eq.Food');
+    else query = query.eq('section', 'general');
+  }
+
   const { data, error, count } = await query;
 
   if (error) {
@@ -66,14 +87,59 @@ itemsRouter.get('/', async (req, res) => {
     return res.status(500).json({ error: 'Failed to fetch items' });
   }
 
-  // Attach action_count to each item instead of the full tasks array.
-  const items = (data ?? []).map((item) => ({
-    ...item,
-    action_count: Array.isArray(item.action_tasks) ? item.action_tasks.length : 0,
-    action_tasks: undefined,
-  }));
+  // Attach action_count to each item instead of the full tasks array (full view only).
+  const items = ((data ?? []) as any[]).map((item) => {
+    if (view === 'slim' || view === 'card') return item;
+    return ({
+      ...item,
+      action_count: Array.isArray(item.action_tasks) ? item.action_tasks.length : 0,
+      action_tasks: undefined,
+    });
+  });
 
   return res.json({ items, total: count ?? items.length });
+});
+
+// ─── GET /items/summary ───────────────────────────────────────
+// Counts + latest items for fast app startup.
+
+itemsRouter.get('/summary', async (req, res) => {
+  const userId = req.userId;
+
+  const [all, ai, money, travel, food, latest] = await Promise.all([
+    (supabase.from('items').select('id', { count: 'exact', head: true }).eq('user_id', userId) as any),
+    (supabase.from('items').select('id', { count: 'exact', head: true }).eq('user_id', userId).or('section.eq.ai,primary_category.eq.AI') as any),
+    (supabase.from('items').select('id', { count: 'exact', head: true }).eq('user_id', userId).or('section.eq.money,primary_category.eq.Money') as any),
+    (supabase.from('items').select('id', { count: 'exact', head: true }).eq('user_id', userId).or('section.eq.travel,primary_category.eq.Travel') as any),
+    (supabase.from('items').select('id', { count: 'exact', head: true }).eq('user_id', userId).or('section.eq.food,primary_category.eq.Food') as any),
+    ((supabase
+      .from('items')
+      .select(
+        `id, source_url, source_platform, creator_name, title, summary,
+         primary_category, tags, actionable, confidence_score,
+         extraction_quality, status, created_at, analyzed_at,
+         section`,
+      )
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(20)) as any),
+  ]);
+
+  if (latest.error) {
+    console.error('[items] summary latest error', latest.error);
+    return res.status(500).json({ error: 'Failed to fetch summary' });
+  }
+
+  return res.json({
+    totals: {
+      all: all.count ?? 0,
+      ai: ai.count ?? 0,
+      money: money.count ?? 0,
+      travel: travel.count ?? 0,
+      food: food.count ?? 0,
+    },
+    latest: latest.data ?? [],
+  });
 });
 
 // ─── GET /items/:id ───────────────────────────────────────────

@@ -26,6 +26,7 @@ import { Swipeable } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, deleteItem, type Item } from '../../lib/api';
 import { colors, radius, typography, spacing, cardShadow } from '../../lib/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 function formatAge(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -59,11 +60,12 @@ export default function LibraryScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [activeCategory, setActiveCategory] = useState('All');
+  const insets = useSafeAreaInsets();
 
   const { data, isLoading, isRefetching, refetch } = useQuery({
     queryKey: ['items', activeCategory],
     queryFn: () =>
-      listItems({ category: activeCategory === 'All' ? undefined : activeCategory, limit: 50 }),
+      listItems({ category: activeCategory === 'All' ? undefined : activeCategory, limit: 50, view: 'slim' }),
   });
 
   const items = data?.items ?? [];
@@ -236,7 +238,7 @@ export default function LibraryScreen() {
           contentContainerStyle={
             items.length === 0
               ? styles.emptyContainer
-              : { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 24 }
+              : { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 24 + insets.bottom + 72 }
           }
           ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         />

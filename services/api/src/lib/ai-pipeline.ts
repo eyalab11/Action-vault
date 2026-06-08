@@ -125,10 +125,10 @@ export async function extractSectionData(
     return { section, section_data: await extractFood(analysis) };
   }
   if (section === 'ai') {
-    return { section, section_data: await extractAI(analysis, transcript) };
+    return { section, section_data: await extractAI(analysis, transcript, visualContext) };
   }
   if (section === 'money') {
-    return { section, section_data: await extractMoney(analysis, transcript) };
+    return { section, section_data: await extractMoney(analysis, transcript, visualContext) };
   }
   return { section: 'general', section_data: {} };
 }
@@ -146,13 +146,24 @@ async function extractTravel(analysis: ItemAnalysisOutput, transcript: string | 
   const raw = completion.choices[0]?.message?.content ?? '{}';
   try {
     const parsed = JSON.parse(raw) as Partial<TravelExtractionOutput>;
-    return {
-      locations: Array.isArray(parsed.locations)
-        ? parsed.locations.filter(l => typeof l.name === 'string' && typeof l.lat === 'number' && typeof l.lng === 'number')
-        : [],
-      trip_context: typeof parsed.trip_context === 'string' ? parsed.trip_context : '',
-      best_season: typeof parsed.best_season === 'string' ? parsed.best_season : null,
-    };
+    const locations = Array.isArray(parsed.locations)
+      ? parsed.locations.filter(l => typeof l.name === 'string' && typeof l.lat === 'number' && typeof l.lng === 'number')
+      : [];
+
+    const trip_context = typeof parsed.trip_context === 'string' ? parsed.trip_context : '';
+    const best_season = typeof parsed.best_season === 'string' ? parsed.best_season : null;
+
+    // Fallback: if visual OCR found many place names but the extractor returned only a few,
+    // do a second pass to fill in the missing coordinates.
+    const candidates = extractLocationCandidatesFromVisualContext(visualContext);
+    const missing = diffLocations(candidates, locations.map((l: any) => String(l.name ?? '')));
+    if (missing.length > 0 && candidates.length >= 4) {
+      const extra = await geocodeLocations(missing.slice(0, 12), analysis.title, analysis.summary);
+      const merged = mergeLocations(locations as any[], extra);
+      return { locations: merged, trip_context, best_season };
+    }
+
+    return { locations, trip_context, best_season };
   } catch {
     return { locations: [], trip_context: '', best_season: null };
   }
@@ -185,14 +196,14 @@ async function extractFood(analysis: ItemAnalysisOutput): Promise<FoodExtraction
   }
 }
 
-async function extractAI(analysis: ItemAnalysisOutput, transcript: string | null): Promise<AIExtractionOutput> {
+async function extractAI(analysis: ItemAnalysisOutput, transcript: string | null, visualContext: string | null): Promise<AIExtractionOutput> {
   const completion = await openai.chat.completions.create({
     model: MODEL,
     response_format: { type: 'json_object' },
     temperature: 0.2,
     messages: [
       { role: 'system', content: EXTRACT_AI_SYSTEM_PROMPT },
-      { role: 'user', content: buildExtractAIUserPrompt(analysis.title, analysis.summary, analysis.tags, transcript) },
+      { role: 'user', content: buildExtractAIUserPrompt(analysis.title, analysis.summary, analysis.tags, transcript, visualContext) },
     ],
   });
   const raw = completion.choices[0]?.message?.content ?? '{}';
@@ -210,14 +221,14 @@ async function extractAI(analysis: ItemAnalysisOutput, transcript: string | null
   }
 }
 
-async function extractMoney(analysis: ItemAnalysisOutput, transcript: string | null): Promise<MoneyExtractionOutput> {
+async function extractMoney(analysis: ItemAnalysisOutput, transcript: string | null, visualContext: string | null): Promise<MoneyExtractionOutput> {
   const completion = await openai.chat.completions.create({
     model: MODEL,
     response_format: { type: 'json_object' },
     temperature: 0.2,
     messages: [
       { role: 'system', content: EXTRACT_MONEY_SYSTEM_PROMPT },
-      { role: 'user', content: buildExtractMoneyUserPrompt(analysis.title, analysis.summary, analysis.tags, transcript) },
+      { role: 'user', content: buildExtractMoneyUserPrompt(analysis.title, analysis.summary, analysis.tags, transcript, visualContext) },
     ],
   });
   const raw = completion.choices[0]?.message?.content ?? '{}';
@@ -245,3 +256,107 @@ function isValidQuality(v: unknown): v is ItemAnalysisOutput['extraction_quality
 
 export { detectSection };
 export type { Section };
+
+function extractLocationCandidatesFromVisualContext(visualContext: string | null): string[] {
+  if (!visualContext) return [];
+  const out = new Set<string>();
+
+  // 1) Aggregate line: "Locations mentioned visually: a, b, c"
+  const agg = visualContext.match(/Locations mentioned visually:\s*([^\n]+)/i)?.[1];
+  if (agg) {
+    for (const part of agg.split(',').map((s) => s.trim()).filter(Boolean)) out.add(part);
+  }
+
+  // 2) Per-image lines: "... locations=Foo, Bar; ..."
+  for (const m of visualContext.matchAll(/locations=([^\n;]+)/gi)) {
+    const raw = m[1];
+    if (!raw) continue;
+    for (const part of raw.split(',').map((s) => s.trim()).filter(Boolean)) out.add(part);
+  }
+
+  return [...out].slice(0, 30);
+}
+
+function normalizePlaceName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[()[\]{}]/g, '')
+    .replace(/['".]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function diffLocations(candidates: string[], extractedNames: string[]): string[] {
+  const extractedNorm = extractedNames.map(normalizePlaceName).filter(Boolean);
+  return candidates.filter((c) => {
+    const cn = normalizePlaceName(c);
+    if (!cn) return false;
+    return !extractedNorm.some((en) => en === cn || en.includes(cn) || cn.includes(en));
+  });
+}
+
+function mergeLocations(
+  base: any[],
+  extra: any[],
+): any[] {
+  const merged = [...base];
+  const seen = new Set(base.map((l) => normalizePlaceName(String(l?.name ?? ''))).filter(Boolean));
+  for (const l of extra) {
+    const key = normalizePlaceName(String(l?.name ?? ''));
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(l);
+  }
+  return merged;
+}
+
+async function geocodeLocations(
+  names: string[],
+  title: string,
+  summary: string,
+): Promise<any[]> {
+  if (names.length === 0) return [];
+
+  const system = `You geocode travel place names into map pins.
+Return valid JSON only.
+If a name is not a real place, omit it.
+
+Output:
+{
+  "locations": [
+    {
+      "name": "string (full place name, include city/country if known)",
+      "lat": number,
+      "lng": number,
+      "description": "string (1 sentence, why it's interesting)",
+      "type": "restaurant|landmark|hotel|activity|neighborhood|other"
+    }
+  ]
+}`;
+
+  const user = [
+    `Context title: ${title}`,
+    `Context summary: ${summary}`,
+    `Place names to geocode (each should become a pin if real):`,
+    ...names.map((n) => `- ${n}`),
+  ].join('\n');
+
+  const completion = await openai.chat.completions.create({
+    model: MODEL,
+    response_format: { type: 'json_object' },
+    temperature: 0.1,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? '{}';
+  try {
+    const parsed = JSON.parse(raw) as { locations?: any[] };
+    const locs = Array.isArray(parsed.locations) ? parsed.locations : [];
+    return locs.filter((l) => typeof l?.name === 'string' && typeof l?.lat === 'number' && typeof l?.lng === 'number');
+  } catch {
+    return [];
+  }
+}

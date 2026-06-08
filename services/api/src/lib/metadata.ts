@@ -222,7 +222,9 @@ async function fetchInstagramEmbed(
       ? unescapeCtx(videoUrlRaw)
       : null;
 
-    const imageUrls = extractInstagramImageUrls(html, unescapeCtx);
+    const imageUrls =
+      extractInstagramCarouselImageUrls(html, unescapeCtx) ??
+      extractInstagramImageUrls(html, unescapeCtx);
 
     console.log(
       `[metadata] Instagram embed: creator="${creatorName}" caption="${description?.slice(0, 80) ?? '[none]'}" video=${videoUrl ? 'YES' : 'NO'} images=${imageUrls.length}`,
@@ -233,6 +235,48 @@ async function fetchInstagramEmbed(
     console.error('[metadata] Instagram embed fetch failed', err);
     return empty;
   }
+}
+
+/**
+ * Prefer extracting ordered carousel images from edge_sidecar_to_children, when present.
+ * Returns null when the post doesn't look like a carousel.
+ */
+function extractInstagramCarouselImageUrls(
+  html: string,
+  unescapeCtx: (s: string) => string,
+): string[] | null {
+  const idx = html.indexOf('edge_sidecar_to_children');
+  if (idx < 0) return null;
+
+  // Keep the slice relatively small but large enough to contain all child nodes.
+  const tail = html.slice(idx, idx + 160_000);
+  const end = tail.search(/edge_media_to_caption|edge_media_to_comment|edge_media_preview_like|edge_media_to_tagged_user/);
+  const segment = end > 0 ? tail.slice(0, end) : tail;
+
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  const pushUrl = (raw: string) => {
+    if (!raw) return;
+    const url = decodeHtmlEntities(unescapeCtx(raw)).trim();
+    if (!/^https?:\/\//i.test(url)) return;
+    if (/\.mp4(\?|$)/i.test(url)) return;
+    // Dedupe by base URL without query string.
+    const key = url.split('?')[0];
+    if (seen.has(key)) return;
+    seen.add(key);
+    urls.push(url);
+  };
+
+  // Most embed HTML is escaped; keep a fallback for unescaped variants.
+  for (const match of segment.matchAll(/display_url[\\]*":[\\]*"((?:[^"\\]|\\[^"])*)\\"/g)) {
+    pushUrl(match[1]);
+  }
+  for (const match of segment.matchAll(/display_url":"([^"]+)"/g)) {
+    pushUrl(match[1]);
+  }
+
+  return urls.length ? urls.slice(0, 10) : null;
 }
 
 function extractInstagramImageUrls(
@@ -259,7 +303,7 @@ function extractInstagramImageUrls(
     }
   }
 
-  return [...urls].slice(0, 6);
+  return [...urls].slice(0, 10);
 }
 
 async function fetchImageAsDataUrl(imageUrl: string): Promise<string | null> {
@@ -293,57 +337,46 @@ async function analyzeInstagramImages(
 ): Promise<string | null> {
   if (imageUrls.length === 0 || !process.env.OPENAI_API_KEY) return null;
 
-  const dataUrls: string[] = [];
-  for (const imageUrl of imageUrls.slice(0, 4)) {
+  const images: { index: number; dataUrl: string }[] = [];
+  let idx = 1;
+  for (const imageUrl of imageUrls.slice(0, 10)) {
     const dataUrl = await fetchImageAsDataUrl(imageUrl);
-    if (dataUrl) dataUrls.push(dataUrl);
+    if (dataUrl) images.push({ index: idx, dataUrl });
+    idx += 1;
   }
-  if (dataUrls.length === 0) return null;
+  if (images.length === 0) return null;
 
   try {
-    const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
-      {
-        type: 'text',
-        text:
-          'Analyze these Instagram carousel/photo images for ActionVault. ' +
-          'Extract visible text/OCR, specific place names, and what the images actually show. ' +
-          'Do not infer from hashtags or unrelated captions. Return JSON only with keys: ' +
-          'visual_summary (string), visible_text (array of strings), locations (array of strings), confidence (high|medium|low).' +
-          `\nCaption, if any:\n${caption ?? '[none]'}`,
-      },
-      ...dataUrls.map((url) => ({
-        type: 'image_url' as const,
-        image_url: { url, detail: 'high' as const },
-      })),
-    ];
+    const chunks = chunk(images, 4);
+    const perImageLines: string[] = [];
+    const visibleTextSet = new Set<string>();
+    const entitySet = new Set<string>();
+    const locationSet = new Set<string>();
+    const summaries: string[] = [];
+    const confidences: string[] = [];
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-      messages: [{ role: 'user', content }],
-    });
+    for (const batch of chunks) {
+      const result = await analyzeInstagramImageBatch(batch, caption);
+      if (result.summary) summaries.push(result.summary);
+      if (result.confidence) confidences.push(result.confidence);
+      for (const line of result.perImageLines) perImageLines.push(line);
+      for (const t of result.visibleText) visibleTextSet.add(t);
+      for (const e of result.entities) entitySet.add(e);
+      for (const l of result.locations) locationSet.add(l);
+    }
 
-    const raw = completion.choices[0]?.message?.content ?? '{}';
-    const parsed = JSON.parse(raw) as {
-      visual_summary?: unknown;
-      visible_text?: unknown;
-      locations?: unknown;
-      confidence?: unknown;
-    };
-
-    const summary = typeof parsed.visual_summary === 'string' ? parsed.visual_summary.trim() : '';
-    const visibleText = Array.isArray(parsed.visible_text)
-      ? parsed.visible_text.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-      : [];
-    const locations = Array.isArray(parsed.locations)
-      ? parsed.locations.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-      : [];
-    const confidence = typeof parsed.confidence === 'string' ? parsed.confidence : 'medium';
+    // Prefer a single concise summary (first batch) but keep per-image fidelity.
+    const summary = summaries.find(Boolean) ?? '';
+    const visibleText = [...visibleTextSet];
+    const entities = [...entitySet];
+    const locations = [...locationSet];
+    const confidence = confidences.includes('high') ? 'high' : (confidences.includes('medium') ? 'medium' : 'low');
 
     const parts = [
       summary ? `Visual summary: ${summary}` : null,
+      perImageLines.length ? `Per-image details:\n${perImageLines.join('\n')}` : null,
       visibleText.length ? `Visible text/OCR: ${visibleText.join(' | ')}` : null,
+      entities.length ? `Named entities / repos / tools / URLs: ${entities.join(', ')}` : null,
       locations.length ? `Locations mentioned visually: ${locations.join(', ')}` : null,
       `Visual confidence: ${confidence}`,
     ].filter(Boolean);
@@ -353,6 +386,114 @@ async function analyzeInstagramImages(
     console.error('[metadata] Instagram image analysis failed', err);
     return null;
   }
+}
+
+function chunk<T>(arr: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+async function analyzeInstagramImageBatch(
+  batch: { index: number; dataUrl: string }[],
+  caption: string | null,
+): Promise<{
+  summary: string;
+  perImageLines: string[];
+  visibleText: string[];
+  entities: string[];
+  locations: string[];
+  confidence: 'high' | 'medium' | 'low';
+}> {
+  const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+    {
+      type: 'text',
+      text:
+        'You are extracting facts from Instagram carousel images for ActionVault.\n' +
+        'For EACH image, extract visible text/OCR and any exact names of: places, restaurants, landmarks, cities, countries, repos, tools, websites, and URLs.\n' +
+        'Be literal and preserve the exact names you can see.\n' +
+        'Return JSON only with keys:\n' +
+        '- visual_summary (string)\n' +
+        '- per_image (array of {index:number, description:string, visible_text:string[], entities:string[], locations:string[]})\n' +
+        '- visible_text (string[])\n' +
+        '- entities (string[])\n' +
+        '- locations (string[])\n' +
+        '- confidence (high|medium|low)\n' +
+        `Caption (may be noisy):\n${caption ?? '[none]'}\n` +
+        `Images in this batch (in order): ${batch.map((b) => b.index).join(', ')}`,
+    },
+    ...batch.flatMap((b) => ([
+      { type: 'text' as const, text: `Image index: ${b.index}` },
+      { type: 'image_url' as const, image_url: { url: b.dataUrl, detail: 'high' as const } },
+    ])),
+  ];
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    response_format: { type: 'json_object' },
+    temperature: 0.1,
+    messages: [{ role: 'user', content }],
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? '{}';
+  const parsed = JSON.parse(raw) as {
+    visual_summary?: unknown;
+    per_image?: unknown;
+    visible_text?: unknown;
+    entities?: unknown;
+    locations?: unknown;
+    confidence?: unknown;
+  };
+
+  const summary = typeof parsed.visual_summary === 'string' ? parsed.visual_summary.trim() : '';
+  const visibleText = Array.isArray(parsed.visible_text)
+    ? parsed.visible_text.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    : [];
+  const entities = Array.isArray(parsed.entities)
+    ? parsed.entities.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    : [];
+  const locations = Array.isArray(parsed.locations)
+    ? parsed.locations.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    : [];
+  const confidence = (parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low')
+    ? parsed.confidence
+    : 'medium';
+
+  const perImageLines = Array.isArray(parsed.per_image)
+    ? parsed.per_image
+        .map((entry) => {
+          if (!entry || typeof entry !== 'object') return null;
+          const row = entry as {
+            index?: unknown;
+            description?: unknown;
+            visible_text?: unknown;
+            entities?: unknown;
+            locations?: unknown;
+          };
+          const index = typeof row.index === 'number' ? row.index : null;
+          const description = typeof row.description === 'string' ? row.description.trim() : '';
+          const text = Array.isArray(row.visible_text)
+            ? row.visible_text.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+            : [];
+          const rowEntities = Array.isArray(row.entities)
+            ? row.entities.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+            : [];
+          const rowLocations = Array.isArray(row.locations)
+            ? row.locations.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+            : [];
+          const details = [
+            description,
+            text.length ? `text=${text.join(' | ')}` : null,
+            rowEntities.length ? `entities=${rowEntities.join(', ')}` : null,
+            rowLocations.length ? `locations=${rowLocations.join(', ')}` : null,
+          ].filter(Boolean);
+          if (!details.length) return null;
+          return `Image ${index ?? '?'}: ${details.join('; ')}`;
+        })
+        .filter((v): v is string => typeof v === 'string')
+    : [];
+
+  return { summary, perImageLines, visibleText, entities, locations, confidence };
 }
 
 // ─── Instagram GraphQL fallback ──────────────────────────────

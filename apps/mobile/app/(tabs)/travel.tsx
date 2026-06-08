@@ -8,7 +8,6 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item } from '../../lib/api';
-import { effectiveSection } from '../../lib/sections';
 import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
 
@@ -247,11 +246,11 @@ export default function TravelScreen() {
   const [mapState, setMapState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'all'],
-    queryFn: () => listItems({ limit: 100 }),
+    queryKey: ['items', 'section', 'travel'],
+    queryFn: () => listItems({ section: 'travel', limit: 100, view: 'card' }),
   });
 
-  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'travel'));
+  const items = dedupItems(data?.items ?? []);
   const itemsWithoutPins = items.filter(i => !(i.section_data?.locations?.length));
   const totalPins = items.reduce((n, item) => n + (item.section_data?.locations?.length ?? 0), 0);
   const allCountries = [

@@ -4,9 +4,9 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item } from '../../lib/api';
-import { effectiveSection } from '../../lib/sections';
 import { dedupItems, type DedupedItem } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Taste = 'all' | 'sweet' | 'salty' | 'spicy' | 'savory' | 'sour' | 'umami';
 
@@ -31,13 +31,14 @@ function formatTime(mins: number | null | undefined) {
 export default function FoodScreen() {
   const router = useRouter();
   const [activeTaste, setActiveTaste] = useState<Taste>('all');
+  const insets = useSafeAreaInsets();
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'all'],
-    queryFn: () => listItems({ limit: 100 }),
+    queryKey: ['items', 'section', 'food'],
+    queryFn: () => listItems({ section: 'food', limit: 80, view: 'card' }),
   });
 
-  const items = dedupItems((data?.items ?? []).filter(i => effectiveSection(i) === 'food'));
+  const items = dedupItems(data?.items ?? []);
   const filtered = activeTaste === 'all'
     ? items
     : items.filter(item => item.section_data?.taste_profile?.[activeTaste as keyof typeof item.section_data.taste_profile]);
@@ -114,7 +115,7 @@ export default function FoodScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.title}>Food & Recipes</Text>
         <Text style={styles.subtitle}>{items.length} saved · {filtered.length} showing</Text>
       </View>
@@ -147,7 +148,7 @@ export default function FoodScreen() {
           data={filtered}
           keyExtractor={i => i.id}
           renderItem={renderCard}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: spacing.lg + insets.bottom + 72 }]}
           showsVerticalScrollIndicator={false}
         />
       )}

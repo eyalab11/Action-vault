@@ -7,6 +7,7 @@ import { listItems, type Item, type Section } from '../../lib/api';
 import { effectiveSection } from '../../lib/sections';
 import { dedupItems } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow, typography } from '../../lib/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SECTIONS: { key: string; route: string; label: string; icon: string; color: string; bg: string }[] = [
   { key: 'travel',  route: '/(tabs)/travel',  label: 'Travel',  icon: 'map-outline',          color: '#2B8A6E', bg: '#E5F8F1' },
@@ -28,19 +29,27 @@ export default function HomeScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const appState = useRef(AppState.currentState);
+  const lastBackgroundAtRef = useRef<number | null>(null);
+  const insets = useSafeAreaInsets();
 
   // Re-fetch everything when the app comes back from background after 5+ minutes
   useEffect(() => {
     const sub = AppState.addEventListener('change', nextState => {
+      if (nextState.match(/inactive|background/)) {
+        lastBackgroundAtRef.current = Date.now();
+      }
       if (appState.current.match(/inactive|background/) && nextState === 'active') {
-        queryClient.invalidateQueries({ queryKey: ['items'] });
+        const lastBg = lastBackgroundAtRef.current;
+        if (lastBg && Date.now() - lastBg > 5 * 60_000) {
+          queryClient.invalidateQueries({ queryKey: ['items'] });
+        }
       }
       appState.current = nextState;
     });
     return () => sub.remove();
   }, [queryClient]);
 
-  const { data, isLoading } = useQuery({ queryKey: ['items', 'all'], queryFn: () => listItems({ limit: 100 }) });
+  const { data, isLoading } = useQuery({ queryKey: ['items', 'all-slim'], queryFn: () => listItems({ limit: 100, view: 'slim' }) });
   const rawItems = data?.items ?? [];
 
   // Dedup: many shares of the same URL collapse into one card with a "× N" badge.
@@ -57,7 +66,14 @@ export default function HomeScreen() {
   );
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: insets.top + 16, paddingBottom: spacing.lg + insets.bottom + 72 },
+      ]}
+      showsVerticalScrollIndicator={false}
+    >
       <Text style={styles.greeting}>Your Vault</Text>
       <Text style={styles.sub}>
         {deduped.length} unique {deduped.length === 1 ? 'item' : 'items'}
@@ -125,7 +141,7 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: spacing.lg, paddingTop: 60 },
+  content: { padding: spacing.lg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg },
   greeting: { fontSize: 28, fontWeight: '700', color: colors.textPrimary, letterSpacing: -0.5 },
   sub: { fontSize: 14, color: colors.textMuted, marginTop: 4, marginBottom: 28 },

@@ -1,11 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { AppState } from 'react-native';
+import { AppState, PermissionsAndroid, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/auth';
 import { colors } from '../lib/theme';
 import { listItems } from '../lib/api';
+import { normalizeUrl } from '../lib/dedup';
 import * as Linking from 'expo-linking';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -29,14 +31,57 @@ function warmupBackend() {
 /** Prefetch the unified item list — section screens filter client-side via effectiveSection. */
 async function prefetchAllSections() {
   await queryClient.prefetchQuery({
-    queryKey: ['items', 'all'],
-    queryFn: () => listItems({ limit: 100 }),
+    queryKey: ['items', 'all-slim'],
+    queryFn: () => listItems({ limit: 100, view: 'slim' }),
   });
 }
 
 export default function RootLayout() {
   const setSession = useAuthStore((s) => s.setSession);
   const router = useRouter();
+  const lastSharedKeyRef = useRef<{ key: string; ts: number } | null>(null);
+
+  // Hydrate cached item lists so the UI renders instantly, then refreshes in background.
+  useEffect(() => {
+    const hydrate = async (key: unknown[], storageKey: string) => {
+      try {
+        const raw = await AsyncStorage.getItem(storageKey);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        queryClient.setQueryData(key, parsed);
+      } catch {}
+    };
+
+    hydrate(['items', 'all-slim'], 'cache:items:all-slim');
+    hydrate(['items', 'section', 'ai'], 'cache:items:section:ai');
+    hydrate(['items', 'section', 'money'], 'cache:items:section:money');
+    hydrate(['items', 'section', 'travel'], 'cache:items:section:travel');
+    hydrate(['items', 'section', 'food'], 'cache:items:section:food');
+
+    // Persist the key queries when they change.
+    const unsub = queryClient.getQueryCache().subscribe((event: any) => {
+      const q = event?.query;
+      if (!q) return;
+      const key = q.queryKey;
+      if (!Array.isArray(key)) return;
+      const data = q.state?.data;
+      if (!data) return;
+
+      const k = JSON.stringify(key);
+      const map: Record<string, string> = {
+        '["items","all-slim"]': 'cache:items:all-slim',
+        '["items","section","ai"]': 'cache:items:section:ai',
+        '["items","section","money"]': 'cache:items:section:money',
+        '["items","section","travel"]': 'cache:items:section:travel',
+        '["items","section","food"]': 'cache:items:section:food',
+      };
+      const storageKey = map[k];
+      if (!storageKey) return;
+      AsyncStorage.setItem(storageKey, JSON.stringify(data)).catch(() => {});
+    });
+
+    return () => unsub();
+  }, []);
 
   // Listen for auth state changes from Supabase.
   useEffect(() => {
@@ -60,6 +105,21 @@ export default function RootLayout() {
     return () => listener.subscription.unsubscribe();
   }, [setSession]);
 
+  // Ask for notification permission once (Android 13+).
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (typeof Platform.Version !== 'number' || Platform.Version < 33) return;
+
+    (async () => {
+      const asked = await AsyncStorage.getItem('notifPermAsked').catch(() => null);
+      if (asked) return;
+      await AsyncStorage.setItem('notifPermAsked', '1').catch(() => {});
+      try {
+        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+      } catch {}
+    })();
+  }, []);
+
   // Handle Android share intent — the config plugin converts ACTION_SEND → actionvault://add?sharedUrl=...
   // so Expo's Linking module can read it normally.
   useEffect(() => {
@@ -82,9 +142,14 @@ export default function RootLayout() {
           : extractFirstUrl(raw);
 
         if (sharedUrl) {
+          const key = normalizeUrl(sharedUrl);
+          const last = lastSharedKeyRef.current;
+          if (last && last.key === key && Date.now() - last.ts < 2000) return;
+          lastSharedKeyRef.current = { key, ts: Date.now() };
+
           setTimeout(() => {
             try {
-              router.push({ pathname: '/(tabs)/add', params: { sharedUrl } });
+              router.replace({ pathname: '/(tabs)/add', params: { sharedUrl } });
             } catch {}
           }, 800);
         }

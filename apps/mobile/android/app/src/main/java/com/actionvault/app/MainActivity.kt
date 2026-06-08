@@ -13,7 +13,6 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
-    handleShareIntent(intent)
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
     // This is required for expo-splash-screen.
@@ -62,18 +61,7 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onNewIntent(intent: Intent?) {
-    handleShareIntent(intent)
+    setIntent(intent)
     super.onNewIntent(intent)
   }
-
-  private fun handleShareIntent(intent: Intent?) {
-    if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
-      val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
-      val encoded = android.net.Uri.encode(sharedText)
-      intent.data = android.net.Uri.parse("actionvault://add?sharedUrl=$encoded")
-      intent.action = Intent.ACTION_VIEW
-      setIntent(intent)
-    }
-  }
-
 }
