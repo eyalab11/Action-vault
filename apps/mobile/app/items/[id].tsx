@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Linking, Alert, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Linking, Alert, TextInput, ActivityIndicator, Image } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -18,6 +18,52 @@ const PIN_COLORS: Record<string, string> = {
   restaurant: '#E53E3E', landmark: '#3182CE', hotel: '#805AD5',
   activity: '#D69E2E', neighborhood: '#38A169', other: '#718096',
 };
+
+function getVisualSummary(visualContext: string | null | undefined) {
+  if (!visualContext) return null;
+  const summary = visualContext.match(/Visual summary:\s*([^\n]+)/i)?.[1]?.trim();
+  if (summary) return summary;
+  const firstDetail = visualContext.match(/Image\s+\d+:\s*([^\n]+)/i)?.[1]?.trim();
+  return firstDetail ?? null;
+}
+
+function PostMediaSection({ item }: { item: Item }) {
+  const mediaUrls = (item.media_urls ?? []).filter((url) => /^https?:\/\//i.test(url)).slice(0, 10);
+  const visualSummary = getVisualSummary(item.visual_context);
+
+  if (mediaUrls.length === 0 && !visualSummary) return null;
+
+  return (
+    <View style={styles.mediaSection}>
+      {mediaUrls.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.mediaStrip}
+        >
+          {mediaUrls.map((url, index) => (
+            <Image
+              key={`${url}-${index}`}
+              source={{ uri: url }}
+              style={[styles.mediaImage, mediaUrls.length === 1 && styles.mediaImageSingle]}
+              resizeMode="cover"
+            />
+          ))}
+        </ScrollView>
+      )}
+
+      {visualSummary && (
+        <View style={styles.visualCard}>
+          <Ionicons name="eye-outline" size={16} color={colors.accent} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.visualLabel}>What this post showed</Text>
+            <Text style={styles.visualText}>{visualSummary}</Text>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
 
 function SectionPanel({ item }: { item: Item }) {
   const section = item.section ?? 'general';
@@ -59,7 +105,11 @@ pins.forEach(function(p){var el=document.createElement('div');el.className='pin'
         />
         {locs.map((loc, i) => (
           <View key={i} style={panelStyles.locationRow}>
-            <View style={[panelStyles.locationDot, { backgroundColor: PIN_COLORS[loc.type] ?? '#718096' }]} />
+            {(loc.media_url ?? item.media_urls?.[i] ?? item.media_urls?.[0]) ? (
+              <Image source={{ uri: loc.media_url ?? item.media_urls?.[i] ?? item.media_urls?.[0] }} style={panelStyles.locationThumb} />
+            ) : (
+              <View style={[panelStyles.locationDot, { backgroundColor: PIN_COLORS[loc.type] ?? '#718096' }]} />
+            )}
             <View style={{ flex: 1 }}>
               <Text style={panelStyles.locationName}>{loc.name}</Text>
               <Text style={panelStyles.locationDesc} numberOfLines={1}>{loc.description}</Text>
@@ -180,6 +230,12 @@ const panelStyles = StyleSheet.create({
   pin: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
   locationRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   locationDot: { width: 8, height: 8, borderRadius: 4, marginTop: 5 },
+  locationThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSecondary,
+  },
   locationName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
   locationDesc: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
   meta: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
@@ -368,6 +424,8 @@ export default function ItemDetailScreen() {
             </Text>
           </View>
         )}
+
+        <PostMediaSection item={item} />
 
         {/* Title */}
         <Text style={styles.title}>{item.title ?? 'Untitled'}</Text>
@@ -574,6 +632,47 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   categoryText: { fontSize: 12, fontWeight: '700' },
+
+  mediaSection: {
+    marginBottom: 18,
+    gap: 10,
+  },
+  mediaStrip: {
+    gap: 10,
+    paddingRight: 20,
+  },
+  mediaImage: {
+    width: 230,
+    height: 300,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSecondary,
+  },
+  mediaImageSingle: {
+    width: '100%',
+  },
+  visualCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: colors.surfaceWarm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.accentMuted,
+    padding: 14,
+  },
+  visualLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.accent,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  visualText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    lineHeight: 19,
+  },
 
   title: {
     ...typography.display,

@@ -14,6 +14,7 @@ export interface ActionTask {
 export interface TravelLocation {
   name: string; lat: number; lng: number; description: string;
   type: 'restaurant' | 'landmark' | 'hotel' | 'activity' | 'neighborhood' | 'other';
+  media_url?: string;
 }
 
 export interface FoodTasteProfile {
@@ -38,6 +39,8 @@ export interface Item {
   manual_note: string | null; created_at: string; analyzed_at: string | null;
   action_tasks?: ActionTask[]; action_count?: number;
   section?: Section;
+  media_urls?: string[];
+  visual_context?: string | null;
   section_data?: {
     locations?: TravelLocation[];
     trip_context?: string;
@@ -117,7 +120,7 @@ export async function listItems(params?: { status?: string; category?: string; s
 }
 
 export async function getItemsSummary() {
-  return apiFetch<{ totals: { all: number; ai: number; money: number; travel: number; food: number }; latest: Item[] }>('/items/summary');
+  return apiFetch<{ totals: { all: number; general: number; ai: number; money: number; travel: number; food: number }; latest: Item[] }>('/items/summary');
 }
 
 export async function getItem(id: string) {

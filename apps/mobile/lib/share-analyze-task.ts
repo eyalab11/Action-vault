@@ -57,6 +57,9 @@ export async function shareAnalyzeTask(data: ShareAnalyzeTaskData): Promise<void
       return;
     }
 
+    // Signal the foreground app to refresh list/map caches when it becomes active.
+    await AsyncStorage.setItem('needsItemsRefresh', '1').catch(() => {});
+
     if (typeof notifications?.showReadyNotification === 'function') {
       notifications.showReadyNotification(
         itemId,

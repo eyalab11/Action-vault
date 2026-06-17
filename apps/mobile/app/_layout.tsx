@@ -6,7 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/auth';
 import { colors } from '../lib/theme';
-import { listItems } from '../lib/api';
+import { getItemsSummary } from '../lib/api';
 import { normalizeUrl } from '../lib/dedup';
 import * as Linking from 'expo-linking';
 
@@ -28,11 +28,11 @@ function warmupBackend() {
   fetch(`${API_URL}/health`, { method: 'GET' }).catch(() => {});
 }
 
-/** Prefetch the unified item list — section screens filter client-side via effectiveSection. */
-async function prefetchAllSections() {
+/** Prefetch only the lightweight startup payload. Section screens load lazily. */
+async function prefetchStartupSummary() {
   await queryClient.prefetchQuery({
-    queryKey: ['items', 'all-slim'],
-    queryFn: () => listItems({ limit: 100, view: 'slim' }),
+    queryKey: ['items', 'summary'],
+    queryFn: () => getItemsSummary(),
   });
 }
 
@@ -52,7 +52,9 @@ export default function RootLayout() {
       } catch {}
     };
 
+    hydrate(['items', 'summary'], 'cache:items:summary');
     hydrate(['items', 'all-slim'], 'cache:items:all-slim');
+    hydrate(['items', 'section', 'general'], 'cache:items:section:general');
     hydrate(['items', 'section', 'ai'], 'cache:items:section:ai');
     hydrate(['items', 'section', 'money'], 'cache:items:section:money');
     hydrate(['items', 'section', 'travel'], 'cache:items:section:travel');
@@ -70,6 +72,8 @@ export default function RootLayout() {
       const k = JSON.stringify(key);
       const map: Record<string, string> = {
         '["items","all-slim"]': 'cache:items:all-slim',
+        '["items","summary"]': 'cache:items:summary',
+        '["items","section","general"]': 'cache:items:section:general',
         '["items","section","ai"]': 'cache:items:section:ai',
         '["items","section","money"]': 'cache:items:section:money',
         '["items","section","travel"]': 'cache:items:section:travel',
@@ -85,25 +89,41 @@ export default function RootLayout() {
 
   // Listen for auth state changes from Supabase.
   useEffect(() => {
+    // Warm the backend immediately (even before auth is restored) to reduce cold-start latency.
+    warmupBackend();
+
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
-      // Once we have a session, wake the backend and prefetch everything
+      // Once we have a session, fetch only the tiny startup summary.
       if (data.session) {
-        warmupBackend();
-        prefetchAllSections();
+        prefetchStartupSummary();
       }
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) {
-        warmupBackend();
-        prefetchAllSections();
+        prefetchStartupSummary();
       }
     });
 
     return () => listener.subscription.unsubscribe();
   }, [setSession]);
+
+  // If a background share save happened, refresh items once on next foreground.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      (async () => {
+        const needs = await AsyncStorage.getItem('needsItemsRefresh').catch(() => null);
+        if (!needs) return;
+        await AsyncStorage.removeItem('needsItemsRefresh').catch(() => {});
+        queryClient.invalidateQueries({ queryKey: ['items'] });
+        prefetchStartupSummary().catch(() => {});
+      })();
+    });
+    return () => sub.remove();
+  }, []);
 
   // Ask for notification permission once (Android 13+).
   useEffect(() => {

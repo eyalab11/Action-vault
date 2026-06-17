@@ -69,6 +69,8 @@ SOURCE PRIORITY:
 
 RULES:
 - Never summarize hashtags as if they are the actual content.
+- If an Instagram/TikTok item has no transcript and no image/OCR context, treat it as insufficient data. Do NOT infer a topic from hashtags, creator niche, URL, or generic page metadata.
+- If only weak metadata is available, return extraction_quality "low" or "failed", confidence_score <= 0.35, and a summary that says we could not extract enough reliable information.
 - If image/OCR context contains place names or visible text, base the title, summary, category, and tags on that context.
 - Preserve exact named entities from the source: repo names, app names, websites, URLs, handles, tools, restaurants, cities, and landmarks.
 - If the content recommends a concrete repo/tool/place and the name is available, the title or summary MUST include that exact name. Do not replace it with generic wording like "a repository" or "a tool".
@@ -118,6 +120,11 @@ export function buildAnalyzeUserPrompt(input: ItemAnalysisInput): string {
       ? input.visualContext.slice(0, 6000) + '… [truncated]'
       : input.visualContext;
     lines.push(`\nImage/OCR context (PRIMARY SOURCE FOR IMAGE POSTS):\n${truncated}`);
+  } else if (isVideoSocial && !input.transcript) {
+    lines.push(
+      '\nData quality warning: no transcript and no image/OCR context could be fetched for this social post. ' +
+      'Do not infer the topic from hashtags, creator niche, or generic page metadata. Mark extraction as low/failed unless the caption itself contains concrete reliable facts.',
+    );
   }
   if (input.manualNote) lines.push(`User note: ${input.manualNote}`);
   return lines.join('\n') + '\n\nClassify and summarize.';

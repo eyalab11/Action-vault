@@ -26,6 +26,8 @@ export interface FetchedMetadata {
   ogTitle: string | null;
   ogDescription: string | null;
   creatorName: string | null;
+  /** Public media/thumbnail URLs extracted from the source post, if available. */
+  mediaUrls: string[];
   /** Transcript of the video audio (via Whisper), if available. */
   transcript: string | null;
   /** OCR + visual notes from image/carousel posts, if available. */
@@ -412,6 +414,7 @@ async function analyzeInstagramImageBatch(
         'You are extracting facts from Instagram carousel images for ActionVault.\n' +
         'For EACH image, extract visible text/OCR and any exact names of: places, restaurants, landmarks, cities, countries, repos, tools, websites, and URLs.\n' +
         'Be literal and preserve the exact names you can see.\n' +
+        'Do not infer the rest of a carousel from the caption or from one image. If only one image is provided, describe only that image and set confidence low/medium unless it clearly contains the full content.\n' +
         'Return JSON only with keys:\n' +
         '- visual_summary (string)\n' +
         '- per_image (array of {index:number, description:string, visible_text:string[], entities:string[], locations:string[]})\n' +
@@ -620,6 +623,7 @@ export async function fetchMetadata(rawUrl: string): Promise<FetchedMetadata> {
   let ogTitle: string | null = null;
   let ogDescription: string | null = null;
   let creatorName: string | null = null;
+  let mediaUrls: string[] = [];
   let transcript: string | null = null;
   let visualContext: string | null = null;
 
@@ -658,6 +662,7 @@ export async function fetchMetadata(rawUrl: string): Promise<FetchedMetadata> {
       ?? null;
 
     let videoUrl = embed.videoUrl ?? og.videoUrl;
+    mediaUrls = embed.imageUrls;
     visualContext = await analyzeInstagramImages(embed.imageUrls, ogDescription);
 
     // Fallback: try Instagram's GraphQL endpoint if we still don't have a video URL.
@@ -686,5 +691,5 @@ export async function fetchMetadata(rawUrl: string): Promise<FetchedMetadata> {
     ogDescription = og.description;
   }
 
-  return { platform, canonicalUrl, ogTitle, ogDescription, creatorName, transcript, visualContext };
+  return { platform, canonicalUrl, ogTitle, ogDescription, creatorName, mediaUrls, transcript, visualContext };
 }

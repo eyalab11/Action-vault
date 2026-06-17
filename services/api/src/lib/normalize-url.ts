@@ -7,6 +7,7 @@
 const TRACKING_PARAMS = new Set([
   'igsh',
   'igshid',
+  'img_index',
   'utm_source',
   'utm_medium',
   'utm_campaign',

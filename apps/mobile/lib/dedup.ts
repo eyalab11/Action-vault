@@ -16,6 +16,7 @@ import type { Item } from './api';
 const TRACKING_PARAMS = new Set([
   'igsh',         // Instagram share tracking
   'igshid',       // older Instagram share id
+  'img_index',    // Instagram carousel slide index; same post/content
   'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
   'fbclid',       // Facebook click id
   'gclid',        // Google click id

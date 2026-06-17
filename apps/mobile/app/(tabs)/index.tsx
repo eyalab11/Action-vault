@@ -3,13 +3,14 @@ import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator, AppSt
 import { useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
-import { listItems, type Item, type Section } from '../../lib/api';
+import { getItemsSummary, listItems, type Item, type Section } from '../../lib/api';
 import { effectiveSection } from '../../lib/sections';
 import { dedupItems } from '../../lib/dedup';
 import { colors, spacing, radius, cardShadow, typography } from '../../lib/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SECTIONS: { key: string; route: string; label: string; icon: string; color: string; bg: string }[] = [
+  { key: 'general', route: '/(tabs)/general', label: 'General', icon: 'albums-outline',        color: '#6B6B6B', bg: '#F0F0F0' },
   { key: 'travel',  route: '/(tabs)/travel',  label: 'Travel',  icon: 'map-outline',          color: '#2B8A6E', bg: '#E5F8F1' },
   { key: 'food',    route: '/(tabs)/food',    label: 'Food',    icon: 'restaurant-outline',   color: '#C05621', bg: '#FFF0E6' },
   { key: 'ai',      route: '/(tabs)/ai',      label: 'AI',      icon: 'sparkles-outline',     color: '#5B5FD6', bg: '#EEEEFF' },
@@ -49,17 +50,37 @@ export default function HomeScreen() {
     return () => sub.remove();
   }, [queryClient]);
 
-  const { data, isLoading } = useQuery({ queryKey: ['items', 'all-slim'], queryFn: () => listItems({ limit: 100, view: 'slim' }) });
-  const rawItems = data?.items ?? [];
+  const { data: summary, isLoading } = useQuery({
+    queryKey: ['items', 'summary'],
+    queryFn: () => getItemsSummary(),
+  });
+
+  // Optional: load recent slim items in the background for the home list.
+  const { data: allSlim } = useQuery({
+    queryKey: ['items', 'all-slim'],
+    queryFn: () => listItems({ limit: 30, view: 'slim' }),
+    enabled: !!summary,
+    staleTime: 5 * 60_000,
+  });
+
+  const rawItems = allSlim?.items ?? summary?.latest ?? [];
 
   // Dedup: many shares of the same URL collapse into one card with a "× N" badge.
   const deduped = dedupItems(rawItems);
   const duplicateCount = rawItems.length - deduped.length;
 
-  const countBySection = SECTIONS.reduce((acc, s) => {
-    acc[s.key] = deduped.filter(i => effectiveSection(i) === s.key).length;
-    return acc;
-  }, {} as Record<string, number>);
+  const countBySection = summary?.totals
+    ? ({
+        general: summary.totals.general,
+        travel: summary.totals.travel,
+        food: summary.totals.food,
+        ai: summary.totals.ai,
+        money: summary.totals.money,
+      } as Record<string, number>)
+    : SECTIONS.reduce((acc, s) => {
+        acc[s.key] = deduped.filter(i => effectiveSection(i) === s.key).length;
+        return acc;
+      }, {} as Record<string, number>);
 
   if (isLoading) return (
     <View style={styles.center}><ActivityIndicator color={colors.accent} /></View>

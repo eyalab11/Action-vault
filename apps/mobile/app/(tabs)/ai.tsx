@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, FlatList, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, FlatList, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { listItems, type Item } from '../../lib/api';
 import { dedupItems, type DedupedItem } from '../../lib/dedup';
+import { effectiveSection } from '../../lib/sections';
 import { colors, spacing, radius, cardShadow } from '../../lib/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -32,11 +33,18 @@ export default function AIToolsScreen() {
   const insets = useSafeAreaInsets();
 
   const { data, isLoading } = useQuery({
-    queryKey: ['items', 'section', 'ai'],
-    queryFn: () => listItems({ section: 'ai', limit: 80, view: 'card' }),
+    queryKey: ['items', 'section', 'ai-with-legacy-general'],
+    queryFn: async () => {
+      const [ai, general] = await Promise.all([
+        listItems({ section: 'ai', limit: 80, view: 'card' }),
+        listItems({ section: 'general', limit: 100, view: 'card' }),
+      ]);
+      return { items: [...ai.items, ...general.items], total: ai.total + general.total };
+    },
+    staleTime: 5 * 60_000,
   });
 
-  const items = dedupItems(data?.items ?? []);
+  const items = dedupItems(data?.items ?? []).filter(item => effectiveSection(item) === 'ai');
   const filtered = activeTool === 'All' ? items : items.filter(i => i.section_data?.tool === activeTool);
 
   // Count per tool
@@ -70,15 +78,7 @@ export default function AIToolsScreen() {
         </View>
 
         <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
-        {item.summary && <Text style={styles.cardSummary} numberOfLines={2}>{item.summary}</Text>}
-
-        {/* Use case */}
-        {d?.use_case && (
-          <View style={styles.useCase}>
-            <Ionicons name="flash-outline" size={12} color={colors.accent} />
-            <Text style={styles.useCaseText}>{d.use_case}</Text>
-          </View>
-        )}
+        {item.summary && <Text style={styles.cardSummary} numberOfLines={3}>{item.summary}</Text>}
 
         {/* Prompt tip pill */}
         {d?.prompt_tip && (
@@ -105,12 +105,13 @@ export default function AIToolsScreen() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
+        <Text style={styles.kicker}>Knowledge Shelf</Text>
         <Text style={styles.title}>AI Tools</Text>
-        <Text style={styles.subtitle}>{items.length} saved tips & techniques</Text>
+        <Text style={styles.subtitle}>{items.length} saved tip{items.length === 1 ? '' : 's'} and techniques</Text>
       </View>
 
-      {/* Tool filter row */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll} contentContainerStyle={styles.filterRow}>
+      {/* Tool filter panel */}
+      <View style={styles.filterPanel}>
         {AI_TOOLS.filter(t => t.key === 'All' || counts[t.key] > 0).map(tool => (
           <Pressable
             key={tool.key}
@@ -126,7 +127,7 @@ export default function AIToolsScreen() {
             )}
           </Pressable>
         ))}
-      </ScrollView>
+      </View>
 
       {filtered.length === 0 ? (
         <View style={styles.emptyState}>
@@ -141,6 +142,9 @@ export default function AIToolsScreen() {
           renderItem={renderCard}
           contentContainerStyle={[styles.listContent, { paddingBottom: spacing.lg + insets.bottom + 72 }]}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={6}
+          maxToRenderPerBatch={8}
+          windowSize={7}
         />
       )}
     </View>
@@ -150,17 +154,41 @@ export default function AIToolsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  header: { paddingHorizontal: spacing.lg, paddingTop: 60, paddingBottom: 8 },
-  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, letterSpacing: -0.5 },
-  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
-  filterScroll: { flexGrow: 0 },
-  filterRow: { paddingHorizontal: spacing.lg, paddingVertical: 12, gap: 8 },
-  toolFilter: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.full, backgroundColor: colors.surfaceSecondary },
-  toolFilterText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
-  toolCount: { minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  header: { paddingHorizontal: spacing.lg, paddingTop: 60, paddingBottom: 12 },
+  kicker: { fontSize: 11, fontWeight: '800', color: colors.accent, letterSpacing: 1.1, textTransform: 'uppercase', marginBottom: 4 },
+  title: { fontSize: 30, fontWeight: '800', color: colors.textPrimary, letterSpacing: -0.9 },
+  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 3 },
+  filterPanel: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginHorizontal: spacing.lg,
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    ...cardShadow,
+    shadowOpacity: 0.03,
+  },
+  toolFilter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    maxWidth: '48%',
+  },
+  toolFilterText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, flexShrink: 1 },
+  toolCount: { minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, marginLeft: 'auto' },
   toolCountText: { fontSize: 10, fontWeight: '700', color: colors.textSecondary },
-  listContent: { padding: spacing.lg, gap: 14 },
-  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 10, position: 'relative' },
+  listContent: { paddingHorizontal: spacing.lg, paddingTop: 8, paddingBottom: spacing.lg, gap: 12 },
+  card: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: 16, ...cardShadow, gap: 9, position: 'relative', borderWidth: 1, borderColor: colors.borderSubtle },
   dupBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
   dupBadgeText: { fontSize: 10, fontWeight: '700', color: colors.accent, letterSpacing: 0.3 },
   cardHeader: { flexDirection: 'row', gap: 8, alignItems: 'center' },
@@ -168,13 +196,13 @@ const styles = StyleSheet.create({
   toolText: { fontSize: 12, fontWeight: '700' },
   skillBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
   skillText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, lineHeight: 22 },
-  cardSummary: { fontSize: 13, color: colors.textSecondary, lineHeight: 18 },
+  cardTitle: { fontSize: 17, fontWeight: '800', color: colors.textPrimary, lineHeight: 23, paddingRight: 44 },
+  cardSummary: { fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
   useCase: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   useCaseText: { fontSize: 12, color: colors.accent, fontWeight: '600' },
-  promptTip: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: 10, gap: 4 },
-  promptTipLabel: { fontSize: 10, fontWeight: '700', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 },
-  promptTipText: { fontSize: 13, color: colors.textPrimary, lineHeight: 18, fontFamily: 'monospace' },
+  promptTip: { backgroundColor: colors.surfaceWarm, borderRadius: radius.md, padding: 10, gap: 4, borderWidth: 1, borderColor: colors.accentMuted },
+  promptTipLabel: { fontSize: 9, fontWeight: '800', color: colors.accent, textTransform: 'uppercase', letterSpacing: 0.7 },
+  promptTipText: { fontSize: 12, color: colors.textPrimary, lineHeight: 17 },
   taskTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   taskTag: { backgroundColor: colors.accentSoft, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
   taskTagText: { fontSize: 11, color: colors.accent, fontWeight: '600' },

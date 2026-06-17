@@ -8,7 +8,7 @@ import { supabase } from './lib/supabase';
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
-// ─── Auto-apply v2 migration (idempotent) ─────────────────────
+// ─── Auto-apply idempotent DB helpers when installed ──────────
 async function applyMigration() {
   try {
     // Add section + section_data columns if they don't exist
@@ -25,6 +25,22 @@ async function applyMigration() {
       }
     } catch (e) {
       console.warn('[startup] could not verify migration status', e);
+    }
+  }
+
+  try {
+    await supabase.rpc('apply_v3_media_migration' as any);
+    console.log('[startup] v3 media migration applied (or already exists)');
+  } catch {
+    try {
+      const { error } = await supabase.from('items').select('media_urls, visual_context').limit(1);
+      if (error?.message?.includes('column') || error?.message?.includes('media_urls') || error?.message?.includes('visual_context')) {
+        console.warn('[startup] media columns missing — run db/migrations/003_item_media.sql in Supabase SQL Editor to persist post images');
+      } else {
+        console.log('[startup] media columns already exist');
+      }
+    } catch (e) {
+      console.warn('[startup] could not verify media migration status', e);
     }
   }
 }
@@ -59,6 +75,60 @@ app.get('/keepalive', async (_req, res) => {
     rowsRead: data?.length ?? 0,
     ts: new Date().toISOString(),
   });
+});
+
+// ─── Public image proxy for mobile WebView map popups ──────────
+// Instagram/CDN images can reject direct hotlinking inside the Leaflet WebView.
+// Proxy only known social image hosts and stream them with browser-like headers.
+app.get('/media/proxy', async (req, res) => {
+  const rawUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  let target: URL;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    return res.status(400).send('Invalid image URL');
+  }
+
+  const host = target.hostname.toLowerCase();
+  const allowed =
+    target.protocol === 'https:' &&
+    (
+      host === 'instagram.com' ||
+      host.endsWith('.instagram.com') ||
+      host === 'cdninstagram.com' ||
+      host.endsWith('.cdninstagram.com') ||
+      host.endsWith('.fbcdn.net') ||
+      host.endsWith('.fbsbx.com')
+    );
+
+  if (!allowed) return res.status(403).send('Image host not allowed');
+
+  try {
+    const upstream = await fetch(target, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        Referer: 'https://www.instagram.com/',
+        Origin: 'https://www.instagram.com',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(12000),
+    });
+
+    if (!upstream.ok) return res.status(upstream.status).send('Image fetch failed');
+    const contentType = upstream.headers.get('content-type') ?? 'image/jpeg';
+    if (!contentType.startsWith('image/')) return res.status(415).send('Not an image');
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.length > 8 * 1024 * 1024) return res.status(413).send('Image too large');
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(buffer);
+  } catch (err) {
+    console.error('[media/proxy] failed', err);
+    return res.status(502).send('Image proxy failed');
+  }
 });
 
 // ─── Routes ───────────────────────────────────────────────────
