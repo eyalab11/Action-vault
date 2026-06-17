@@ -2,8 +2,8 @@ name: Keep ActionVault Supabase Active
 
 on:
   schedule:
-    # Supabase free projects pause after inactivity; touch the DB every 3 days.
-    - cron: "17 6 */3 * *"
+    # Supabase free projects pause after inactivity; touch the DB every day.
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 jobs:
